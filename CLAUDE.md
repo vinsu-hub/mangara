@@ -49,3 +49,13 @@ Installed here from external repos (2026-08-11), since they add capabilities not
 These take precedence over same-named global skills when working in this directory (most-specific-wins). Prefer `ui-ux-pro-max` / `design-system` over the global `frontend-design` for concrete UI decisions (color, type, spacing) in this project, since they carry an actual searchable rules database rather than general guidance.
 
 Note: `adhd` and `taste-skill` (from [uditakhourii/adhd](https://github.com/uditakhourii/adhd) and [leonxlnx/taste-skill](https://github.com/leonxlnx/taste-skill)) were **not** installed as project skills — both are already available globally under the same names, so a project copy would just be a stale duplicate. The `taste-skill` repo also bundles several skills (brandkit, minimalist-skill, redesign-skill, soft-skill, stitch-skill, imagegen-frontend-web/mobile, image-to-code-skill, output-skill, gpt-tasteskill, brutalist-skill) that are likewise already global. `clickhouse-io` and `project-guidelines-example` from the other two repos were skipped as irrelevant noise (a database-specific skill and a generic template example, respectively).
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
