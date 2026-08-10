@@ -95,9 +95,18 @@ export async function loadLayers(
 }
 
 /**
- * Persists the page's layers. Deleted layers are removed by id-diff rather
- * than a wipe-and-reinsert, so panel ids stay stable — `generations` rows
- * reference them.
+ * Persists the page's layers.
+ *
+ * Deleted layers are removed by id-diff rather than wipe-and-reinsert, so
+ * panel ids stay stable — `generations` rows reference them.
+ *
+ * Deliberately does NOT write `image_url`, `generation_status` or
+ * `last_provider`. Those columns are owned by the generation pipeline, which
+ * updates them from the server while the editor is open. Including them here
+ * makes autosave race the pipeline and clobber a finished result with the
+ * browser's stale copy — the panel then sticks on "generating" forever even
+ * though the image landed. On INSERT the column defaults apply; on UPDATE
+ * PostgREST leaves omitted columns untouched, which is exactly what we want.
  */
 export async function saveLayers(
   supabase: SupabaseClient,
@@ -131,11 +140,8 @@ export async function saveLayers(
         style: l.style,
         content: l.content,
         z_index: l.z_index,
-        image_url: l.image_url,
         prompt: l.prompt,
-        generation_status: l.generation_status,
         review_status: l.review_status,
-        last_provider: l.last_provider,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: "id" }

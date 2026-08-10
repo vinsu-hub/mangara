@@ -45,3 +45,4 @@ next-env.d.ts
 .vercel
 .env*
 tests/editor-screenshot.png
+tests/generation-screenshot.png

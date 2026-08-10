@@ -289,15 +289,17 @@ create policy "assets: all" on assets for all
   with check (can_access_project(project_id));
 
 -- -------------------------------------------------------------- storage ----
-
-insert into storage.buckets (id, name, public)
-values ('panels', 'panels', true)
-on conflict (id) do nothing;
-
-drop policy if exists "panels bucket: read" on storage.objects;
-create policy "panels bucket: read" on storage.objects for select
-  using (bucket_id = 'panels');
-
-drop policy if exists "panels bucket: write" on storage.objects;
-create policy "panels bucket: write" on storage.objects for insert
-  with check (bucket_id = 'panels' and auth.uid() is not null);
+--
+-- The `panels` bucket is deliberately NOT created here. `storage.objects` is
+-- owned by `supabase_storage_admin`, so `create policy` on it fails with
+-- "must be owner of table objects" — and because the SQL Editor runs this
+-- whole file in one transaction, that error would roll back every table
+-- above it. The bucket is created through the Storage API instead:
+--
+--   curl -X POST "$SUPABASE_URL/storage/v1/bucket" \
+--     -H "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+--     -H "Content-Type: application/json" \
+--     -d '{"id":"panels","name":"panels","public":true}'
+--
+-- It is public for reads, and uploads go through the secret key server-side,
+-- so no bucket policies are required.

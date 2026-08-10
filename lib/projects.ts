@@ -19,10 +19,14 @@ export interface Project {
 export async function getOrCreateDefaultProject(
   supabase: SupabaseClient
 ): Promise<Project> {
-  const { data, error } = await supabase
-    .rpc("get_or_create_default_project")
-    .single<Project>();
+  const { data, error } = await supabase.rpc("get_or_create_default_project");
 
   if (error) throw error;
-  return data;
+
+  // PostgREST returns a bare object for a composite-returning function, but
+  // wraps it in an array for a SETOF one. Accept either.
+  const project = (Array.isArray(data) ? data[0] : data) as Project | null;
+  if (!project?.id) throw new Error("Project bootstrap returned no row");
+
+  return project;
 }

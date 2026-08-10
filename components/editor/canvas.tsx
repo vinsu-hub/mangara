@@ -17,6 +17,14 @@ import { useEditor } from "@/lib/store/editor";
 import type { Layer, LayerKind } from "@/lib/types";
 
 const PAGE_BG = "#ffffff";
+
+// Fabric v6+ defaults originX/originY to "center", which makes `left`/`top`
+// the object's CENTRE. Every geometry value in this app — the Inspector, the
+// stored panel rows, the drag maths — treats x/y as the top-left corner, so
+// every object we create has to opt back into top-left origin. Without this a
+// panel renders offset by half its size and the page backdrop sits centred on
+// the origin with three quarters of it off-screen.
+const TOP_LEFT = { originX: "left", originY: "top" } as const;
 const DEFAULTS: Record<LayerKind, { fill: string; stroke: string }> = {
   panel: { fill: "#e9e9ee", stroke: "#111111" },
   shape: { fill: "#c9c9d4", stroke: "#111111" },
@@ -85,9 +93,17 @@ export function EditorCanvas() {
       (wrap.clientHeight - pad) / pg.height
     );
     const z = Math.max(0.05, scale);
-    fc.setZoom(z);
-    fc.viewportTransform[4] = (wrap.clientWidth - pg.width * z) / 2;
-    fc.viewportTransform[5] = (wrap.clientHeight - pg.height * z) / 2;
+    // Set zoom and translation in one shot. Mutating `viewportTransform` in
+    // place after `setZoom` doesn't stick — setZoom recomputes the matrix, so
+    // the assignment is silently discarded and the page renders at 0,0.
+    fc.setViewportTransform([
+      z,
+      0,
+      0,
+      z,
+      (wrap.clientWidth - pg.width * z) / 2,
+      (wrap.clientHeight - pg.height * z) / 2,
+    ]);
     fc.requestRenderAll();
     useEditor.getState().setZoom(z);
   }, []);
@@ -99,14 +115,18 @@ export function EditorCanvas() {
     const fc = new FabricCanvas(elRef.current, {
       backgroundColor: "#1b1b1f",
       preserveObjectStacking: true,
-raiseSelectionOnHover: false,
+      raiseSelectionOnHover: false,
     });
     fcRef.current = fc;
 
     const resize = () => {
       const wrap = wrapRef.current;
       if (!wrap) return;
+      // setDimensions rebuilds the backing store and drops the viewport
+      // transform with it, so the fit has to be re-applied afterwards —
+      // otherwise the page ends up parked in the corner at the wrong scale.
       fc.setDimensions({ width: wrap.clientWidth, height: wrap.clientHeight });
+      fitToScreen();
       fc.requestRenderAll();
     };
     resize();
@@ -184,6 +204,7 @@ raiseSelectionOnHover: false,
 
       const d = DEFAULTS[kind];
       const common = {
+        ...TOP_LEFT,
         left: p.x,
         top: p.y,
         fill: d.fill,
@@ -254,15 +275,24 @@ raiseSelectionOnHover: false,
         : "shape";
 
       const st = useEditor.getState();
+
+      // Keep new layers on the page. Without this a drag that runs past the
+      // edge silently creates geometry out in the void, where it can't be
+      // seen at fit-to-screen and won't appear in an export.
+      const pw = st.page?.width ?? Infinity;
+      const ph = st.page?.height ?? Infinity;
+      const x = Math.max(0, Math.min(Math.round(d.obj.left ?? 0), pw));
+      const y = Math.max(0, Math.min(Math.round(d.obj.top ?? 0), ph));
+
       st.addLayer({
         id: crypto.randomUUID(),
         page_id: st.page?.id ?? "",
         kind,
         geometry: {
-          x: Math.round(d.obj.left ?? 0),
-          y: Math.round(d.obj.top ?? 0),
-          w: Math.round(w),
-          h: Math.round(h),
+          x,
+          y,
+          w: Math.round(Math.min(w, pw - x)),
+          h: Math.round(Math.min(h, ph - y)),
           rotation: 0,
           shape: kind === "bubble" ? "ellipse" : "rectangle",
         },
@@ -295,7 +325,7 @@ raiseSelectionOnHover: false,
       fcRef.current = null;
       objects.current.clear();
     };
-  }, []);
+  }, [fitToScreen]);
 
   // ------------------------------------------------------- page backdrop ---
   useEffect(() => {
@@ -311,6 +341,12 @@ raiseSelectionOnHover: false,
       selectable: false,
       evented: false,
       hoverCursor: "default",
+      ...TOP_LEFT,
+      // A full-page rect (2048x2896) blows past Fabric's offscreen cache size
+      // limit, and the clamped cache gets painted back at the wrong scale —
+      // the backdrop ends up as a quadrant in the corner while every other
+      // object transforms correctly. It's a flat fill; caching buys nothing.
+      objectCaching: false,
     });
     pageRect.current = r;
     fc.add(r);
@@ -332,6 +368,7 @@ raiseSelectionOnHover: false,
       if (!obj) {
         const g = layer.geometry;
         const base = {
+          ...TOP_LEFT,
           left: g.x,
           top: g.y,
           width: g.w,
