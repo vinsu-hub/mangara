@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Circle, Plus, Search, Trash2 } from "lucide-react";
+import { Check, Circle, ExternalLink, Plus, Search, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { errorMessage } from "@/lib/errors";
 import {
@@ -17,7 +17,10 @@ import {
   listSceneCharacterIds,
   setSceneCharacter,
   updateScene,
+  ensurePagesForRange,
+  getScenePages,
   type ChapterStats,
+  type ScenePages,
 } from "@/lib/story";
 import { listCharacters } from "@/lib/characters";
 import type { Beat, Chapter, Character, Scene, SceneTag } from "@/lib/types";
@@ -63,7 +66,13 @@ function ProgressRing({ value }: { value: number }) {
   );
 }
 
-export function StoryBoard({ projectId }: { projectId: string }) {
+export function StoryBoard({
+  projectId,
+  onOpenPage,
+}: {
+  projectId: string;
+  onOpenPage?: (pageId: string) => void;
+}) {
   const supabase = useRef(createClient()).current;
 
   const [tab, setTab] = useState<Tab>("Chapters");
@@ -77,6 +86,8 @@ export function StoryBoard({ projectId }: { projectId: string }) {
   const [sceneChars, setSceneChars] = useState<string[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [allScenes, setAllScenes] = useState<Record<string, Scene[]>>({});
+  /** Real pages + panel counts behind each scene's page range, keyed by scene id. */
+  const [scenePages, setScenePages] = useState<Record<string, ScenePages>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -134,6 +145,33 @@ export function StoryBoard({ projectId }: { projectId: string }) {
       cancelled = true;
     };
   }, [activeChapter, supabase]);
+
+  useEffect(() => {
+    if (!activeChapter || !scenes.length) {
+      setScenePages({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const entries = await Promise.all(
+          scenes.map(
+            async (sc) =>
+              [
+                sc.id,
+                await getScenePages(supabase, activeChapter, sc.page_start, sc.page_end),
+              ] as const
+          )
+        );
+        if (!cancelled) setScenePages(Object.fromEntries(entries));
+      } catch (e) {
+        if (!cancelled) setError(errorMessage(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scenes, activeChapter, supabase]);
 
   useEffect(() => {
     if (!activeScene) {
@@ -220,6 +258,27 @@ export function StoryBoard({ projectId }: { projectId: string }) {
     guard(async () => {
       await deleteBeat(supabase, id);
       setBeats((b) => b.filter((x) => x.id !== id));
+    });
+
+  const createMissingPages = () =>
+    guard(async () => {
+      if (!scene || !activeChapter || scene.page_start == null) return;
+      const created = await ensurePagesForRange(
+        supabase,
+        activeChapter,
+        scene.page_start,
+        scene.page_end ?? scene.page_start
+      );
+      if (!created.length) return;
+      await loadChapters();
+      setScenePages((sp) => ({ ...sp, [scene.id]: sp[scene.id] }));
+      const refreshed = await getScenePages(
+        supabase,
+        activeChapter,
+        scene.page_start,
+        scene.page_end
+      );
+      setScenePages((sp) => ({ ...sp, [scene.id]: refreshed }));
     });
 
   const toggleCharacter = (characterId: string) =>
@@ -434,9 +493,33 @@ export function StoryBoard({ projectId }: { projectId: string }) {
                           <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                             {s.synopsis || "No synopsis yet."}
                           </p>
-                          <p className="mt-2 text-[11px] text-muted-foreground">
-                            Pages {s.page_start ?? "–"}–{s.page_end ?? "–"}
-                          </p>
+                          <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+                            <span>
+                              Pages {s.page_start ?? "–"}–{s.page_end ?? s.page_start ?? "–"}
+                            </span>
+                            <span>
+                              {plural(scenePages[s.id]?.pages.length ?? 0, "page")} live
+                            </span>
+                            <span>{plural(scenePages[s.id]?.panelCount ?? 0, "panel")}</span>
+                            {scenePages[s.id]?.pages.length ? (
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  onOpenPage?.(scenePages[s.id].pages[0].id);
+                                }}
+                                onKeyDown={(ev) => {
+                                  if (ev.key === "Enter")
+                                    onOpenPage?.(scenePages[s.id].pages[0].id);
+                                }}
+                                className="flex items-center gap-1 text-primary hover:underline"
+                              >
+                                <ExternalLink className="size-3" />
+                                Open
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </button>
                     ))}
@@ -655,6 +738,53 @@ export function StoryBoard({ projectId }: { projectId: string }) {
                     />
                   </label>
                 </div>
+                {(() => {
+                  const sp = scenePages[scene.id];
+                  const from = scene.page_start;
+                  const to = scene.page_end ?? scene.page_start;
+                  if (from == null) {
+                    return (
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        Set a page range to link this scene to real pages.
+                      </p>
+                    );
+                  }
+                  const wanted = Math.abs((to ?? from) - from) + 1;
+                  const live = sp?.pages.length ?? 0;
+                  return (
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[11px] text-muted-foreground">
+                        {live} of {wanted} {wanted === 1 ? "page" : "pages"} in this
+                        range exist · {plural(sp?.panelCount ?? 0, "panel")}
+                      </p>
+                      {live < wanted && (
+                        <button
+                          onClick={createMissingPages}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-1.5 text-[11px] text-muted-foreground hover:border-primary hover:text-primary"
+                        >
+                          <Plus className="size-3" />
+                          Create the {wanted - live} missing{" "}
+                          {wanted - live === 1 ? "page" : "pages"}
+                        </button>
+                      )}
+                      {sp?.pages.length ? (
+                        <div className="flex flex-wrap gap-1">
+                          {sp.pages.map((pg) => (
+                            <button
+                              key={pg.id}
+                              onClick={() => onOpenPage?.(pg.id)}
+                              title="Open this page in the editor"
+                              className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-primary"
+                            >
+                              p{pg.order_index}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })()}
+
                 <select
                   value={scene.status}
                   onChange={(e) =>

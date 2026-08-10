@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Beat, Chapter, Scene } from "@/lib/types";
+import type { Beat, Chapter, Page, Scene } from "@/lib/types";
 
 const SCENE_COLS =
   "id, chapter_id, title, synopsis, purpose, tag, order_index, page_start, page_end, status, notes, thumbnail_url";
@@ -203,4 +203,84 @@ export async function getChapterStats(
     panelCount: panels?.length ?? 0,
     approvedCount: (panels ?? []).filter((p) => p.review_status === "approved").length,
   };
+}
+
+
+export interface ScenePages {
+  pages: Page[];
+  panelCount: number;
+  approvedCount: number;
+}
+
+/**
+ * Resolves a scene's page range to the real `pages` rows it covers.
+ *
+ * page_start/page_end are page *numbers* (a page's order_index within its
+ * chapter), which is what an author thinks in. Everything downstream — panel
+ * counts, progress, "open in editor" — resolves through here so the numbers
+ * on screen always describe pages that actually exist.
+ */
+export async function getScenePages(
+  supabase: SupabaseClient,
+  chapterId: string,
+  pageStart: number | null,
+  pageEnd: number | null
+): Promise<ScenePages> {
+  if (pageStart == null) return { pages: [], panelCount: 0, approvedCount: 0 };
+  const end = pageEnd ?? pageStart;
+
+  const { data: pageRows, error } = await supabase
+    .from("pages")
+    .select("id, chapter_id, order_index, width, height")
+    .eq("chapter_id", chapterId)
+    .gte("order_index", Math.min(pageStart, end))
+    .lte("order_index", Math.max(pageStart, end))
+    .order("order_index");
+  if (error) throw error;
+
+  const pages = (pageRows ?? []) as Page[];
+  if (!pages.length) return { pages, panelCount: 0, approvedCount: 0 };
+
+  const { data: panels, error: panelError } = await supabase
+    .from("panels")
+    .select("id, review_status")
+    .in("page_id", pages.map((p) => p.id));
+  if (panelError) throw panelError;
+
+  return {
+    pages,
+    panelCount: panels?.length ?? 0,
+    approvedCount: (panels ?? []).filter((p) => p.review_status === "approved").length,
+  };
+}
+
+/**
+ * Creates whatever pages a scene's range refers to but which don't exist yet,
+ * so a range is never a promise the project can't keep.
+ */
+export async function ensurePagesForRange(
+  supabase: SupabaseClient,
+  chapterId: string,
+  pageStart: number,
+  pageEnd: number
+): Promise<Page[]> {
+  const { data: existing, error } = await supabase
+    .from("pages")
+    .select("order_index")
+    .eq("chapter_id", chapterId);
+  if (error) throw error;
+
+  const have = new Set((existing ?? []).map((p) => p.order_index as number));
+  const missing: number[] = [];
+  for (let i = Math.min(pageStart, pageEnd); i <= Math.max(pageStart, pageEnd); i++) {
+    if (!have.has(i)) missing.push(i);
+  }
+  if (!missing.length) return [];
+
+  const { data, error: insertError } = await supabase
+    .from("pages")
+    .insert(missing.map((order_index) => ({ chapter_id: chapterId, order_index })))
+    .select("id, chapter_id, order_index, width, height");
+  if (insertError) throw insertError;
+  return (data ?? []) as Page[];
 }

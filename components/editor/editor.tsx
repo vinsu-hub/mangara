@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useEditor } from "@/lib/store/editor";
 import {
   createPage,
+  deletePage,
   getFirstChapter,
   listPages,
   loadLayers,
@@ -54,7 +55,12 @@ export function Editor({ projectId }: { projectId: string }) {
         if (cancelled) return;
         setPages(list);
 
-        const first = list[0];
+        // The Story Board can ask for a specific page; honour it, then clear
+        // the request so a later reload doesn't jump back to it.
+        const requested = useEditor.getState().requestedPageId;
+        const first = (requested && list.find((pg) => pg.id === requested)) || list[0];
+        if (requested) useEditor.getState().requestPage(null);
+
         const initial = await loadLayers(supabase, first.id);
         if (cancelled) return;
         skipNextSave.current = true;
@@ -167,6 +173,32 @@ export function Editor({ projectId }: { projectId: string }) {
     loadPage(created, []);
   }, [chapterId, pages.length, supabase, loadPage]);
 
+  const removePage = useCallback(
+    async (target: Page) => {
+      if (pages.length <= 1) return;
+      if (
+        !window.confirm(
+          `Delete page ${target.order_index} and everything on it? This cannot be undone.`
+        )
+      ) {
+        return;
+      }
+      try {
+        await deletePage(supabase, target.id);
+        const remaining = pages.filter((pg) => pg.id !== target.id);
+        setPages(remaining);
+        if (page?.id === target.id && remaining.length) {
+          const next = remaining[0];
+          skipNextSave.current = true;
+          loadPage(next, await loadLayers(supabase, next.id));
+        }
+      } catch (e) {
+        setError(errorMessage(e));
+      }
+    },
+    [pages, page, supabase, loadPage]
+  );
+
   const generate = useCallback(
     async (layer: Layer) => {
       // Persist before generating: the server reads the panel row by id.
@@ -228,6 +260,7 @@ export function Editor({ projectId }: { projectId: string }) {
         activeId={page?.id ?? null}
         onSelect={switchPage}
         onAdd={addPage}
+        onDelete={removePage}
       />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Toolbar onExport={exportPng} />

@@ -16,6 +16,7 @@ import {
   type TPointerEventInfo,
 } from "fabric";
 import { useEditor } from "@/lib/store/editor";
+import { Rulers } from "./rulers";
 import type { Layer, LayerKind } from "@/lib/types";
 
 const PAGE_BG = "#ffffff";
@@ -93,12 +94,46 @@ function commitOutline(
   st.setTool("select");
 }
 
+
+/** Mirrors fabric's viewport transform into the store for the rulers. */
+function syncViewport(fc: FabricCanvas) {
+  const vpt = fc.viewportTransform;
+  useEditor.getState().setViewport({ zoom: vpt[0], tx: vpt[4], ty: vpt[5] });
+}
+
+/** Rounds a value to the nearest grid line. */
+const snapTo = (v: number, size: number) => Math.round(v / size) * size;
+
+/**
+ * A repeating tile used as the grid's pattern fill. One patterned rect is far
+ * cheaper than thousands of line objects on a 2048x2896 page, and it scales
+ * with the viewport for free because it lives in scene space.
+ */
+function gridTile(size: number): HTMLCanvasElement {
+  const tile = document.createElement("canvas");
+  tile.width = size;
+  tile.height = size;
+  const ctx = tile.getContext("2d");
+  if (ctx) {
+    ctx.strokeStyle = "rgba(124,92,255,0.28)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0.5, 0);
+    ctx.lineTo(0.5, size);
+    ctx.moveTo(0, 0.5);
+    ctx.lineTo(size, 0.5);
+    ctx.stroke();
+  }
+  return tile;
+}
+
 export function EditorCanvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLCanvasElement>(null);
   const fcRef = useRef<FabricCanvas | null>(null);
   const objects = useRef(new Map<string, TaggedObject>());
   const pageRect = useRef<Rect | null>(null);
+  const gridRect = useRef<Rect | null>(null);
 
   // Fabric event handlers are registered once, so they'd otherwise close over
   // the first render's state. Refs keep them reading current values.
@@ -117,6 +152,9 @@ export function EditorCanvas() {
   const tool = useEditor((s) => s.tool);
   const shapeMode = useEditor((s) => s.shapeMode);
   const zoom = useEditor((s) => s.zoom);
+  const gridEnabled = useEditor((s) => s.gridEnabled);
+  const gridSize = useEditor((s) => s.gridSize);
+  const rulerEnabled = useEditor((s) => s.rulerEnabled);
 
   useEffect(() => {
     shapeRef.current = shapeMode;
@@ -171,6 +209,7 @@ export function EditorCanvas() {
     ]);
     fc.requestRenderAll();
     useEditor.getState().setZoom(z);
+    syncViewport(fc);
   }, []);
 
   // ---------------------------------------------------------------- init ---
@@ -234,8 +273,32 @@ export function EditorCanvas() {
       );
     };
 
-    fc.on("object:moving", (e) => writeBack(e.target as TaggedObject, true));
-    fc.on("object:scaling", (e) => writeBack(e.target as TaggedObject, true));
+    fc.on("object:moving", (e) => {
+      const obj = e.target as TaggedObject;
+      const { snapEnabled, gridSize } = useEditor.getState();
+      if (snapEnabled) {
+        obj.set({
+          left: snapTo(obj.left ?? 0, gridSize),
+          top: snapTo(obj.top ?? 0, gridSize),
+        });
+        obj.setCoords();
+      }
+      writeBack(obj, true);
+    });
+    fc.on("object:scaling", (e) => {
+      const obj = e.target as TaggedObject;
+      const { snapEnabled, gridSize } = useEditor.getState();
+      if (snapEnabled) {
+        obj.set({
+          width: Math.max(gridSize, snapTo((obj.width ?? 0) * (obj.scaleX ?? 1), gridSize)),
+          height: Math.max(gridSize, snapTo((obj.height ?? 0) * (obj.scaleY ?? 1), gridSize)),
+          scaleX: 1,
+          scaleY: 1,
+        });
+        obj.setCoords();
+      }
+      writeBack(obj, true);
+    });
     fc.on("object:rotating", (e) => writeBack(e.target as TaggedObject, true));
     fc.on("object:modified", (e) => {
       const obj = e.target as TaggedObject;
@@ -264,6 +327,12 @@ export function EditorCanvas() {
         return;
       }
       if (t === "select") return;
+
+      const snap = useEditor.getState();
+      if (snap.snapEnabled) {
+        p.x = snapTo(p.x, snap.gridSize);
+        p.y = snapTo(p.y, snap.gridSize);
+      }
 
       // Non-rectangular panels take their own interaction paths.
       if (t === "panel" && shapeRef.current === "polygon") {
@@ -332,6 +401,7 @@ export function EditorCanvas() {
         const dy = c.y - panning.current.y;
         panning.current = c;
         fc.relativePan(new Point(dx, dy));
+        syncViewport(fc);
         return;
       }
       if (freehand.current) {
@@ -363,7 +433,11 @@ export function EditorCanvas() {
 
       const d = draft.current;
       if (!d) return;
-      const p = fc.getScenePoint(opt.e);
+      const raw = fc.getScenePoint(opt.e);
+      const { snapEnabled, gridSize } = useEditor.getState();
+      const p = snapEnabled
+        ? { x: snapTo(raw.x, gridSize), y: snapTo(raw.y, gridSize) }
+        : raw;
       const w = Math.abs(p.x - d.x);
       const h = Math.abs(p.y - d.y);
       d.obj.set({
@@ -456,6 +530,7 @@ export function EditorCanvas() {
       z = Math.min(5, Math.max(0.05, z));
       fc.zoomToPoint(new Point(e.offsetX, e.offsetY), z);
       useEditor.getState().setZoom(z);
+      syncViewport(fc);
     });
 
     return () => {
@@ -492,6 +567,41 @@ export function EditorCanvas() {
     fc.sendObjectToBack(r);
     fitToScreen();
   }, [page, fitToScreen]);
+
+  // -------------------------------------------------------------- grid ----
+  useEffect(() => {
+    const fc = fcRef.current;
+    if (!fc) return;
+    if (gridRect.current) {
+      fc.remove(gridRect.current);
+      gridRect.current = null;
+    }
+    const pg = useEditor.getState().page;
+    if (!gridEnabled || !pg) {
+      fc.requestRenderAll();
+      return;
+    }
+    const r = new Rect({
+      ...TOP_LEFT,
+      left: 0,
+      top: 0,
+      width: pg.width,
+      height: pg.height,
+      fill: new Pattern({ source: gridTile(gridSize), repeat: "repeat" }),
+      selectable: false,
+      evented: false,
+      hoverCursor: "default",
+      objectCaching: false,
+    });
+    gridRect.current = r;
+    fc.add(r);
+    // Above the page backdrop, below every real layer.
+    if (pageRect.current) {
+      fc.sendObjectToBack(r);
+      fc.sendObjectToBack(pageRect.current);
+    }
+    fc.requestRenderAll();
+  }, [gridEnabled, gridSize, page]);
 
   // ------------------------------------------------- store → fabric sync ---
   useEffect(() => {
@@ -654,29 +764,119 @@ export function EditorCanvas() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
+      // Never hijack typing in a field or a contenteditable.
+      if (
+        target &&
+        (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)
+      ) {
+        return;
+      }
       const st = useEditor.getState();
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
 
-      if ((e.key === "Delete" || e.key === "Backspace") && st.selectedId) {
+      if (mod) {
+        switch (key) {
+          case "z":
+            e.preventDefault();
+            if (e.shiftKey) st.redo();
+            else st.undo();
+            return;
+          case "y":
+            e.preventDefault();
+            st.redo();
+            return;
+          case "c":
+            e.preventDefault();
+            st.copySelection();
+            return;
+          case "x":
+            e.preventDefault();
+            st.cutSelection();
+            return;
+          case "v":
+            e.preventDefault();
+            st.paste();
+            return;
+          case "d":
+            e.preventDefault();
+            if (st.selectedId) st.duplicateLayer(st.selectedId);
+            return;
+          case "a":
+            e.preventDefault();
+            st.selectAll();
+            return;
+          case "s":
+            // Autosave already covers this; swallow it so the browser doesn't
+            // pop its "save page" dialog mid-edit.
+            e.preventDefault();
+            return;
+          case "g":
+            e.preventDefault();
+            st.toggleGrid();
+            return;
+          case "0":
+            e.preventDefault();
+            fitToScreen();
+            return;
+          case "=":
+          case "+":
+            e.preventDefault();
+            st.setZoom(Math.min(5, st.zoom * 1.2));
+            return;
+          case "-":
+            e.preventDefault();
+            st.setZoom(Math.max(0.05, st.zoom / 1.2));
+            return;
+          default:
+            return;
+        }
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (!st.selectedIds.length) return;
         e.preventDefault();
-        st.removeLayer(st.selectedId);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        st.selectedIds.forEach((id) => st.removeLayer(id));
+        return;
+      }
+
+      if (e.key === "Escape") {
+        st.select(null);
+        return;
+      }
+
+      if (e.key.startsWith("Arrow")) {
+        if (!st.selectedIds.length) return;
         e.preventDefault();
-        e.shiftKey ? st.redo() : st.undo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
-        e.preventDefault();
-        if (st.selectedId) st.duplicateLayer(st.selectedId);
-      } else if (e.key === "v") st.setTool("select");
-      else if (e.key === "h") st.setTool("pan");
-      else if (e.key === "p") st.setTool("panel");
+        // Shift nudges by a grid step, otherwise a single pixel.
+        const step = e.shiftKey ? st.gridSize : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        st.nudge(dx, dy);
+        return;
+      }
+
+      switch (key) {
+        case "v": st.setTool("select"); break;
+        case "h": st.setTool("pan"); break;
+        case "p": st.setTool("panel"); break;
+        case "t": st.setTool("text"); break;
+        case "b": st.setTool("bubble"); break;
+        case "u": st.setTool("shape"); break;
+        case "f": st.setTool("sfx"); break;
+        case "g": st.toggleGrid(); break;
+        case "r": st.toggleRuler(); break;
+        case "s": st.toggleSnap(); break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [fitToScreen]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full overflow-hidden">
       <canvas ref={elRef} />
+      {rulerEnabled && <Rulers />}
       <button
         onClick={fitToScreen}
         className="absolute bottom-3 right-3 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground"

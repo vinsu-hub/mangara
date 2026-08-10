@@ -22,9 +22,13 @@ import {
   Spline,
   Pentagon,
   ChevronDown,
+  Grid3x3,
+  Magnet,
+  Ruler,
 } from "lucide-react";
 import { useEditor } from "@/lib/store/editor";
 import { LAYOUTS, instantiateLayout } from "@/lib/layouts";
+import { GRID_SIZES } from "@/lib/store/editor";
 import type { PanelShape, ToolId } from "@/lib/types";
 
 const TOOLS: { id: ToolId; label: string; icon: typeof Square; key?: string }[] = [
@@ -64,6 +68,15 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
   const future = useEditor((s) => s.future.length);
   const saving = useEditor((s) => s.saving);
   const lastSavedAt = useEditor((s) => s.lastSavedAt);
+
+  const gridEnabled = useEditor((s) => s.gridEnabled);
+  const snapEnabled = useEditor((s) => s.snapEnabled);
+  const rulerEnabled = useEditor((s) => s.rulerEnabled);
+  const gridSize = useEditor((s) => s.gridSize);
+  const toggleGrid = useEditor((s) => s.toggleGrid);
+  const toggleSnap = useEditor((s) => s.toggleSnap);
+  const toggleRuler = useEditor((s) => s.toggleRuler);
+  const setGridSize = useEditor((s) => s.setGridSize);
 
   const [layoutOpen, setLayoutOpen] = useState(false);
 
@@ -134,6 +147,57 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
         >
           <Redo2 className="size-4" />
         </button>
+
+        <div className="mx-2 h-8 w-px bg-border" />
+
+        <button
+          onClick={toggleGrid}
+          title="Grid (G)"
+          aria-pressed={gridEnabled}
+          className={`rounded-md p-2 transition-colors ${
+            gridEnabled
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <Grid3x3 className="size-4" />
+        </button>
+        <button
+          onClick={toggleSnap}
+          title="Snap to grid (S)"
+          aria-pressed={snapEnabled}
+          className={`rounded-md p-2 transition-colors ${
+            snapEnabled
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <Magnet className="size-4" />
+        </button>
+        <button
+          onClick={toggleRuler}
+          title="Rulers (R)"
+          aria-pressed={rulerEnabled}
+          className={`rounded-md p-2 transition-colors ${
+            rulerEnabled
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <Ruler className="size-4" />
+        </button>
+        <select
+          value={gridSize}
+          aria-label="Grid size"
+          onChange={(e) => setGridSize(Number(e.target.value))}
+          className="rounded-md border border-border bg-background px-1 py-1 text-[11px] text-muted-foreground outline-none focus:border-primary"
+        >
+          {GRID_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}px
+            </option>
+          ))}
+        </select>
 
         <div className="mx-2 h-8 w-px bg-border" />
 

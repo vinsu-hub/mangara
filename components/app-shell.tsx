@@ -62,6 +62,13 @@ export function AppShell({
     setActiveTab("Editing");
   };
 
+  /** Story Board -> editor: open a specific page on the canvas. */
+  const openPage = (pageId: string) => {
+    useEditor.getState().requestPage(pageId);
+    setActiveRailItem("Main Chat");
+    setActiveTab("Editing");
+  };
+
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center gap-6 border-b border-border px-4">
@@ -158,7 +165,7 @@ export function AppShell({
         )}
 
         {activeRailItem === "Story Board" ? (
-          <StoryBoard projectId={projectId} />
+          <StoryBoard projectId={projectId} onOpenPage={openPage} />
         ) : activeRailItem === "Character Ref" ? (
           <CharacterRef projectId={projectId} onUseInPanel={useInPanel} />
         ) : activeTab === "Editing" ? (

@@ -78,6 +78,14 @@ export async function createPage(
   return data as Page;
 }
 
+export async function deletePage(
+  supabase: SupabaseClient,
+  pageId: string
+): Promise<void> {
+  const { error } = await supabase.from("pages").delete().eq("id", pageId);
+  if (error) throw error;
+}
+
 export async function loadLayers(
   supabase: SupabaseClient,
   pageId: string

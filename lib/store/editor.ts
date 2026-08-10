@@ -4,6 +4,15 @@ import { mergeGeometry, splitGeometry } from "@/lib/layouts";
 
 const HISTORY_LIMIT = 50;
 
+export const GRID_SIZES = [16, 32, 64, 128] as const;
+
+/** Live viewport transform, mirrored from fabric so the rulers can read it. */
+export interface Viewport {
+  zoom: number;
+  tx: number;
+  ty: number;
+}
+
 interface EditorState {
   page: Page | null;
   layers: Layer[];
@@ -14,6 +23,17 @@ interface EditorState {
   /** Which panel shape the Panel tool draws. */
   shapeMode: PanelShape;
   zoom: number;
+  viewport: Viewport;
+  gridEnabled: boolean;
+  snapEnabled: boolean;
+  gridSize: number;
+  rulerEnabled: boolean;
+  clipboard: Layer[];
+  /**
+   * Set when another view (the Story Board) asks the editor to open a
+   * specific page. The editor consumes and clears it on load.
+   */
+  requestedPageId: string | null;
   saving: boolean;
   lastSavedAt: number | null;
 
@@ -25,6 +45,18 @@ interface EditorState {
   setShapeMode: (shape: PanelShape) => void;
   selectMany: (ids: string[]) => void;
   setZoom: (zoom: number) => void;
+  setViewport: (v: Viewport) => void;
+  toggleGrid: () => void;
+  toggleSnap: () => void;
+  setGridSize: (n: number) => void;
+  toggleRuler: () => void;
+  requestPage: (pageId: string | null) => void;
+
+  copySelection: () => void;
+  cutSelection: () => void;
+  paste: () => void;
+  selectAll: () => void;
+  nudge: (dx: number, dy: number) => void;
   select: (id: string | null) => void;
   setSaving: (saving: boolean) => void;
   markSaved: () => void;
@@ -49,6 +81,15 @@ interface EditorState {
   canUndo: () => boolean;
   canRedo: () => boolean;
 }
+
+/**
+ * The effective selection. `selectedId` drives the Inspector while
+ * `selectedIds` carries multi-select; keeping them in sync at every write site
+ * is easy to get wrong, so readers go through here. Without it, actions like
+ * nudge/copy/merge silently do nothing when only `selectedId` was set.
+ */
+const selection = (s: { selectedId: string | null; selectedIds: string[] }): string[] =>
+  s.selectedIds.length ? s.selectedIds : s.selectedId ? [s.selectedId] : [];
 
 const clone = (layers: Layer[]): Layer[] =>
   layers.map((l) => ({
@@ -85,6 +126,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   tool: "select",
   shapeMode: "rectangle",
   zoom: 1,
+  viewport: { zoom: 1, tx: 0, ty: 0 },
+  gridEnabled: false,
+  snapEnabled: false,
+  gridSize: 64,
+  rulerEnabled: false,
+  clipboard: [],
+  requestedPageId: null,
   saving: false,
   lastSavedAt: null,
   past: [],
@@ -98,6 +146,84 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectMany: (selectedIds) =>
     set({ selectedIds, selectedId: selectedIds[0] ?? null }),
   setZoom: (zoom) => set({ zoom }),
+  setViewport: (viewport) => set({ viewport }),
+  toggleGrid: () => set((s) => ({ gridEnabled: !s.gridEnabled })),
+  toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
+  setGridSize: (gridSize) => set({ gridSize }),
+  toggleRuler: () => set((s) => ({ rulerEnabled: !s.rulerEnabled })),
+  requestPage: (requestedPageId) => set({ requestedPageId }),
+
+  copySelection: () =>
+    set((s) => ({
+      clipboard: clone(s.layers.filter((l) => selection(s).includes(l.id))),
+    })),
+
+  cutSelection: () =>
+    set((s) => {
+      const ids = selection(s);
+      const cut = s.layers.filter((l) => ids.includes(l.id));
+      if (!cut.length) return s;
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        clipboard: clone(cut),
+        layers: s.layers.filter((l) => !ids.includes(l.id)),
+        selectedId: null,
+        selectedIds: [],
+      };
+    }),
+
+  paste: () =>
+    set((s) => {
+      if (!s.clipboard.length || !s.page) return s;
+      let z = Math.max(0, ...s.layers.map((l) => l.z_index));
+      // Offset the copies so they don't land exactly on the originals.
+      const copies = s.clipboard.map((l) => ({
+        ...l,
+        id: crypto.randomUUID(),
+        page_id: s.page!.id,
+        z_index: ++z,
+        geometry: { ...l.geometry, x: l.geometry.x + 32, y: l.geometry.y + 32 },
+        style: { ...l.style },
+      }));
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        layers: [...s.layers, ...copies],
+        selectedId: copies[0]?.id ?? null,
+        selectedIds: copies.map((c) => c.id),
+        // Paste again should offset again rather than stack in one spot.
+        clipboard: clone(copies),
+      };
+    }),
+
+  selectAll: () =>
+    set((s) => ({
+      selectedIds: s.layers.map((l) => l.id),
+      selectedId: s.layers[0]?.id ?? null,
+    })),
+
+  nudge: (dx, dy) =>
+    set((s) => {
+      const ids = selection(s);
+      if (!ids.length) return s;
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        layers: s.layers.map((l) =>
+          ids.includes(l.id)
+            ? {
+                ...l,
+                geometry: {
+                  ...l.geometry,
+                  x: l.geometry.x + dx,
+                  y: l.geometry.y + dy,
+                },
+              }
+            : l
+        ),
+      };
+    }),
   select: (selectedId) =>
     set({ selectedId, selectedIds: selectedId ? [selectedId] : [] }),
   setSaving: (saving) => set({ saving }),
@@ -109,6 +235,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       future: [],
       layers: [...s.layers, layer],
       selectedId: layer.id,
+      selectedIds: [layer.id],
     })),
 
   updateLayer: (id, patch, transient = false) =>
@@ -137,6 +264,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       future: [],
       layers: s.layers.filter((l) => l.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
+      selectedIds: s.selectedIds.filter((x) => x !== id),
     })),
 
   duplicateLayer: (id) => {
