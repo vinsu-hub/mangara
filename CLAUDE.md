@@ -18,6 +18,8 @@ Next.js (App Router, TypeScript) + Tailwind CSS v4 + shadcn/ui (Radix base) + Zu
 
 This is Milestone 0 of the build plan (skeleton + public deploy only) — no auth, canvas, or generation logic exists yet. Supabase client is wired but unused. See the full build-order plan (Milestones 0–5) discussed in-session for what comes next: auth, a saving canvas, the AI generation router (Gemini primary, Pollinations/HF fallback), and the reviewing loop.
 
+**Live deploy:** https://mangara-iota.vercel.app (Vercel project `vince-tamis/mangara`, auto-deploys from `main` on push). **GitHub:** https://github.com/vinsu-hub/mangara.
+
 ## Relevant skills for this project
 
 When working here, prefer these skills over ad hoc approaches:
