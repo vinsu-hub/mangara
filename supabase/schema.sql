@@ -303,3 +303,116 @@ create policy "assets: all" on assets for all
 --
 -- It is public for reads, and uploads go through the secret key server-side,
 -- so no bucket policies are required.
+
+-- ============================================================================
+-- Story Board + Character Reference (added after M3)
+-- Appended rather than inlined above so the original section stays readable;
+-- the whole file remains idempotent and safe to re-run.
+-- ============================================================================
+
+create table if not exists scenes (
+  id uuid primary key default gen_random_uuid(),
+  chapter_id uuid references chapters(id) on delete cascade,
+  title text not null,
+  synopsis text,
+  purpose text,
+  tag text check (tag in ('establishing','rising_action','climax','falling_action','resolution')) default 'establishing',
+  order_index int not null,
+  page_start int,
+  page_end int,
+  status text check (status in ('not_started','in_progress','complete')) default 'not_started',
+  notes text,
+  thumbnail_url text,
+  created_at timestamptz default now()
+);
+
+create table if not exists beats (
+  id uuid primary key default gen_random_uuid(),
+  scene_id uuid references scenes(id) on delete cascade,
+  body text not null,
+  order_index int not null,
+  created_at timestamptz default now()
+);
+
+create table if not exists scene_characters (
+  scene_id uuid references scenes(id) on delete cascade,
+  character_id uuid references characters(id) on delete cascade,
+  primary key (scene_id, character_id)
+);
+
+create table if not exists character_relationships (
+  id uuid primary key default gen_random_uuid(),
+  from_character_id uuid references characters(id) on delete cascade,
+  to_character_id uuid references characters(id) on delete cascade,
+  label text not null,
+  unique (from_character_id, to_character_id)
+);
+
+-- The mockup's Basic Info block needs more than the original four columns.
+alter table characters add column if not exists description text;
+alter table characters add column if not exists age text;
+alter table characters add column if not exists height text;
+alter table characters add column if not exists weapon text;
+alter table characters add column if not exists style text;
+alter table characters add column if not exists personality text[] default '{}';
+alter table characters add column if not exists theme_colors text[] default '{}';
+alter table characters add column if not exists hero_image_url text;
+
+-- Character art rides the same generation pipeline as panels, so a generation
+-- may target either. Exactly one of panel_id / character_id is set.
+alter table generations add column if not exists character_id uuid references characters(id) on delete cascade;
+alter table character_references add column if not exists label text;
+alter table character_references add column if not exists created_at timestamptz default now();
+
+create index if not exists scenes_chapter_id_idx on scenes(chapter_id);
+create index if not exists beats_scene_id_idx on beats(scene_id);
+create index if not exists characters_project_id_idx on characters(project_id);
+create index if not exists character_references_character_id_idx on character_references(character_id);
+
+create or replace function can_access_character(cid uuid) returns boolean
+language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from characters c where c.id = cid and can_access_project(c.project_id)
+  );
+$$;
+
+create or replace function can_access_scene(sid uuid) returns boolean
+language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from scenes s where s.id = sid and can_access_chapter(s.chapter_id)
+  );
+$$;
+
+alter table scenes                  enable row level security;
+alter table beats                   enable row level security;
+alter table scene_characters        enable row level security;
+alter table character_relationships enable row level security;
+
+grant select, insert, update, delete on scenes, beats, scene_characters,
+  character_relationships to authenticated;
+
+drop policy if exists "scenes: all" on scenes;
+create policy "scenes: all" on scenes for all
+  using (can_access_chapter(chapter_id))
+  with check (can_access_chapter(chapter_id));
+
+drop policy if exists "beats: all" on beats;
+create policy "beats: all" on beats for all
+  using (can_access_scene(scene_id))
+  with check (can_access_scene(scene_id));
+
+drop policy if exists "scene_characters: all" on scene_characters;
+create policy "scene_characters: all" on scene_characters for all
+  using (can_access_scene(scene_id))
+  with check (can_access_scene(scene_id));
+
+drop policy if exists "character_relationships: all" on character_relationships;
+create policy "character_relationships: all" on character_relationships for all
+  using (can_access_character(from_character_id))
+  with check (can_access_character(from_character_id));
+
+-- Widened: a generation row now belongs to either a panel or a character.
+drop policy if exists "generations: all" on generations;
+create policy "generations: all" on generations for all
+  using (can_access_panel(panel_id) or can_access_character(character_id))
+  with check (can_access_panel(panel_id) or can_access_character(character_id));

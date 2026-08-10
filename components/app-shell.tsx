@@ -14,6 +14,10 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { signOut } from "@/app/actions";
 import { Editor } from "@/components/editor/editor";
+import { StoryBoard } from "@/components/story-board/story-board";
+import { CharacterRef } from "@/components/character-ref/character-ref";
+import { useEditor } from "@/lib/store/editor";
+import { characterPromptBlock } from "@/lib/characters";
 
 const TOP_TABS = ["Prompting", "Editing", "Reviewing"] as const;
 const MENU_ITEMS = ["File", "Edit", "View", "Timeline", "Tools", "Help"];
@@ -35,10 +39,28 @@ export function AppShell({
   userEmail: string;
 }) {
   const [activeTab, setActiveTab] = useState<(typeof TOP_TABS)[number]>("Editing");
-  const [activeRailItem, setActiveRailItem] = useState("Story Board");
+  const [activeRailItem, setActiveRailItem] = useState("Main Chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
 
   const initials = userEmail.slice(0, 2).toUpperCase();
+
+  /**
+   * Character Ref's "Use in Current Panel" writes into the editor store, which
+   * outlives the tab switch — so the panel selected in the Editing tab picks
+   * the text up as soon as you switch back.
+   */
+  const useInPanel = (character: Parameters<typeof characterPromptBlock>[0]) => {
+    const { selectedId, layers, updateLayer } = useEditor.getState();
+    if (!selectedId) return;
+    const layer = layers.find((l) => l.id === selectedId);
+    if (!layer) return;
+    const block = characterPromptBlock(character);
+    updateLayer(selectedId, {
+      prompt: layer.prompt ? `${layer.prompt}. ${block}` : block,
+    });
+    setActiveRailItem("Main Chat");
+    setActiveTab("Editing");
+  };
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
@@ -135,7 +157,11 @@ export function AppShell({
           </aside>
         )}
 
-        {activeTab === "Editing" ? (
+        {activeRailItem === "Story Board" ? (
+          <StoryBoard projectId={projectId} />
+        ) : activeRailItem === "Character Ref" ? (
+          <CharacterRef projectId={projectId} onUseInPanel={useInPanel} />
+        ) : activeTab === "Editing" ? (
           <Editor projectId={projectId} />
         ) : (
           <main className="flex flex-1 items-center justify-center bg-muted/20">

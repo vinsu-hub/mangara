@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { Layer, Page, ToolId } from "@/lib/types";
+import type { Geometry, Layer, PanelShape, Page, ToolId } from "@/lib/types";
+import { mergeGeometry, splitGeometry } from "@/lib/layouts";
 
 const HISTORY_LIMIT = 50;
 
@@ -7,7 +8,11 @@ interface EditorState {
   page: Page | null;
   layers: Layer[];
   selectedId: string | null;
+  /** Multi-selection, needed by Merge. Mirrors the fabric active selection. */
+  selectedIds: string[];
   tool: ToolId;
+  /** Which panel shape the Panel tool draws. */
+  shapeMode: PanelShape;
   zoom: number;
   saving: boolean;
   lastSavedAt: number | null;
@@ -17,6 +22,8 @@ interface EditorState {
 
   loadPage: (page: Page, layers: Layer[]) => void;
   setTool: (tool: ToolId) => void;
+  setShapeMode: (shape: PanelShape) => void;
+  selectMany: (ids: string[]) => void;
   setZoom: (zoom: number) => void;
   select: (id: string | null) => void;
   setSaving: (saving: boolean) => void;
@@ -32,6 +39,10 @@ interface EditorState {
   removeLayer: (id: string) => void;
   duplicateLayer: (id: string) => Layer | null;
 
+  splitLayer: (id: string, axis: "horizontal" | "vertical") => void;
+  mergeLayers: (ids: string[]) => void;
+  applyLayout: (geometries: Geometry[], replace: boolean) => void;
+
   commit: () => void;
   undo: () => void;
   redo: () => void;
@@ -46,11 +57,33 @@ const clone = (layers: Layer[]): Layer[] =>
     style: { ...l.style },
   }));
 
+
+const baseLayer = (
+  pageId: string,
+  geometry: Geometry,
+  zIndex: number
+): Layer => ({
+  id: crypto.randomUUID(),
+  page_id: pageId,
+  kind: "panel",
+  geometry,
+  style: { fill: "#e9e9ee", stroke: "#111111", strokeWidth: 2 },
+  content: null,
+  z_index: zIndex,
+  image_url: null,
+  prompt: null,
+  generation_status: "idle",
+  review_status: "pending",
+  last_provider: null,
+});
+
 export const useEditor = create<EditorState>((set, get) => ({
   page: null,
   layers: [],
   selectedId: null,
+  selectedIds: [],
   tool: "select",
+  shapeMode: "rectangle",
   zoom: 1,
   saving: false,
   lastSavedAt: null,
@@ -58,11 +91,15 @@ export const useEditor = create<EditorState>((set, get) => ({
   future: [],
 
   loadPage: (page, layers) =>
-    set({ page, layers, selectedId: null, past: [], future: [] }),
+    set({ page, layers, selectedId: null, selectedIds: [], past: [], future: [] }),
 
   setTool: (tool) => set({ tool }),
+  setShapeMode: (shapeMode) => set({ shapeMode }),
+  selectMany: (selectedIds) =>
+    set({ selectedIds, selectedId: selectedIds[0] ?? null }),
   setZoom: (zoom) => set({ zoom }),
-  select: (selectedId) => set({ selectedId }),
+  select: (selectedId) =>
+    set({ selectedId, selectedIds: selectedId ? [selectedId] : [] }),
   setSaving: (saving) => set({ saving }),
   markSaved: () => set({ saving: false, lastSavedAt: Date.now() }),
 
@@ -119,6 +156,58 @@ export const useEditor = create<EditorState>((set, get) => ({
     get().addLayer(copy);
     return copy;
   },
+
+  splitLayer: (id, axis) =>
+    set((s) => {
+      const src = s.layers.find((l) => l.id === id);
+      if (!src) return s;
+      const [a, b] = splitGeometry(src.geometry, axis);
+      const maxZ = Math.max(0, ...s.layers.map((l) => l.z_index));
+      // The original keeps its content and takes the first half; the second
+      // half is a fresh empty panel.
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        layers: [
+          ...s.layers.map((l) => (l.id === id ? { ...l, geometry: a } : l)),
+          baseLayer(src.page_id, b, maxZ + 1),
+        ],
+      };
+    }),
+
+  mergeLayers: (ids) =>
+    set((s) => {
+      const chosen = s.layers.filter((l) => ids.includes(l.id));
+      if (chosen.length < 2) return s;
+      // Keep the first panel — along with any prompt or generated image it
+      // already has — and grow it to cover the whole selection.
+      const [keep, ...rest] = chosen;
+      const restIds = new Set(rest.map((l) => l.id));
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        selectedId: keep.id,
+        selectedIds: [keep.id],
+        layers: s.layers
+          .filter((l) => !restIds.has(l.id))
+          .map((l) => (l.id === keep.id ? { ...l, geometry: mergeGeometry(chosen) } : l)),
+      };
+    }),
+
+  applyLayout: (geometries, replace) =>
+    set((s) => {
+      if (!s.page) return s;
+      const kept = replace ? s.layers.filter((l) => l.kind !== "panel") : s.layers;
+      let z = Math.max(0, ...kept.map((l) => l.z_index));
+      const created = geometries.map((g) => baseLayer(s.page!.id, g, ++z));
+      return {
+        past: [...s.past, clone(s.layers)].slice(-HISTORY_LIMIT),
+        future: [],
+        selectedId: null,
+        selectedIds: [],
+        layers: [...kept, ...created],
+      };
+    }),
 
   commit: () =>
     set((s) => ({

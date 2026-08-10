@@ -5,8 +5,10 @@ import {
   Canvas as FabricCanvas,
   Ellipse,
   FabricImage,
+  Path,
   Pattern,
   Point,
+  Polygon,
   Rect,
   Textbox,
   type FabricObject,
@@ -45,6 +47,52 @@ function clientXY(e: TPointerEvent): { x: number; y: number } {
   return { x: e.clientX, y: e.clientY };
 }
 
+
+/**
+ * Commits a polygon/freeform outline as a panel layer. Points are stored
+ * relative to the shape's own bounding box so the panel can be moved and
+ * resized like any rectangular one.
+ */
+function commitOutline(
+  pts: { x: number; y: number }[],
+  shape: "polygon" | "freeform"
+) {
+  const st = useEditor.getState();
+  if (pts.length < 3 || !st.page) return;
+
+  const xs = pts.map((pt) => pt.x);
+  const ys = pts.map((pt) => pt.y);
+  const x = Math.round(Math.min(...xs));
+  const y = Math.round(Math.min(...ys));
+  const w = Math.round(Math.max(...xs) - x);
+  const h = Math.round(Math.max(...ys) - y);
+  if (w < 8 || h < 8) return;
+
+  st.addLayer({
+    id: crypto.randomUUID(),
+    page_id: st.page.id,
+    kind: "panel",
+    geometry: {
+      x,
+      y,
+      w,
+      h,
+      rotation: 0,
+      shape,
+      points: pts.map((pt) => ({ x: Math.round(pt.x - x), y: Math.round(pt.y - y) })),
+    },
+    style: { fill: "#e9e9ee", stroke: "#111111", strokeWidth: 2 },
+    content: null,
+    z_index: Math.max(0, ...st.layers.map((l) => l.z_index)) + 1,
+    image_url: null,
+    prompt: null,
+    generation_status: "idle",
+    review_status: "pending",
+    last_provider: null,
+  });
+  st.setTool("select");
+}
+
 export function EditorCanvas() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLCanvasElement>(null);
@@ -56,6 +104,10 @@ export function EditorCanvas() {
   // the first render's state. Refs keep them reading current values.
   const toolRef = useRef(useEditor.getState().tool);
   const draft = useRef<{ obj: Rect | Ellipse; x: number; y: number } | null>(null);
+  const shapeRef = useRef(useEditor.getState().shapeMode);
+  // Polygon is click-to-place, so it spans many events and needs its own state.
+  const poly = useRef<{ pts: { x: number; y: number }[]; preview: Polygon | null } | null>(null);
+  const freehand = useRef<{ pts: { x: number; y: number }[]; preview: Path | null } | null>(null);
   const panning = useRef<{ x: number; y: number } | null>(null);
   const suppress = useRef(false);
 
@@ -63,7 +115,12 @@ export function EditorCanvas() {
   const layers = useEditor((s) => s.layers);
   const selectedId = useEditor((s) => s.selectedId);
   const tool = useEditor((s) => s.tool);
+  const shapeMode = useEditor((s) => s.shapeMode);
   const zoom = useEditor((s) => s.zoom);
+
+  useEffect(() => {
+    shapeRef.current = shapeMode;
+  }, [shapeMode]);
 
   useEffect(() => {
     toolRef.current = tool;
@@ -78,7 +135,15 @@ export function EditorCanvas() {
       t.selectable = interactive;
       t.evented = interactive;
     });
-    if (!interactive) fc.discardActiveObject();
+    if (!interactive) {
+      // Drop fabric's active object so drawing isn't blocked, but keep the
+      // store's selection: the Panel sub-toolbar's Split/Merge act on the
+      // selected panel, and clearing it here would make them permanently
+      // unusable — you can only select with the Select tool.
+      suppress.current = true;
+      fc.discardActiveObject();
+      suppress.current = false;
+    }
     fc.requestRenderAll();
   }, [tool]);
 
@@ -136,8 +201,13 @@ export function EditorCanvas() {
     // -- selection ---------------------------------------------------------
     const onSelect = () => {
       if (suppress.current) return;
-      const active = fc.getActiveObject() as TaggedObject | undefined;
-      useEditor.getState().select(active?.layerId ?? null);
+      // A multi-select yields an ActiveSelection; report every layer in it so
+      // Merge has something to work with.
+      const ids = fc
+        .getActiveObjects()
+        .map((o) => (o as TaggedObject).layerId)
+        .filter((id): id is string => Boolean(id));
+      useEditor.getState().selectMany(ids);
     };
     fc.on("selection:created", onSelect);
     fc.on("selection:updated", onSelect);
@@ -195,6 +265,30 @@ export function EditorCanvas() {
       }
       if (t === "select") return;
 
+      // Non-rectangular panels take their own interaction paths.
+      if (t === "panel" && shapeRef.current === "polygon") {
+        const pts = [...(poly.current?.pts ?? []), { x: p.x, y: p.y }];
+        if (poly.current?.preview) fc.remove(poly.current.preview);
+        const preview = new Polygon(pts, {
+          ...TOP_LEFT,
+          fill: "rgba(233,233,238,0.5)",
+          stroke: "#7c5cff",
+          strokeWidth: 2,
+          selectable: false,
+          evented: false,
+          objectCaching: false,
+        });
+        poly.current = { pts, preview };
+        fc.add(preview);
+        fc.requestRenderAll();
+        return;
+      }
+
+      if (t === "panel" && shapeRef.current === "freeform") {
+        freehand.current = { pts: [{ x: p.x, y: p.y }], preview: null };
+        return;
+      }
+
       const kind: LayerKind =
         t === "panel" ? "panel"
         : t === "bubble" ? "bubble"
@@ -222,6 +316,15 @@ export function EditorCanvas() {
       fc.add(obj);
     });
 
+    fc.on("mouse:dblclick", () => {
+      if (!poly.current) return;
+      const { pts, preview } = poly.current;
+      if (preview) fc.remove(preview);
+      poly.current = null;
+      commitOutline(pts, "polygon");
+      fc.requestRenderAll();
+    });
+
     fc.on("mouse:move", (opt: TPointerEventInfo) => {
       if (panning.current) {
         const c = clientXY(opt.e);
@@ -231,6 +334,33 @@ export function EditorCanvas() {
         fc.relativePan(new Point(dx, dy));
         return;
       }
+      if (freehand.current) {
+        const p = fc.getScenePoint(opt.e);
+        const pts = freehand.current.pts;
+        const last = pts[pts.length - 1];
+        // Thin the samples — a raw mousemove trace stores far more points
+        // than the outline needs and makes the saved geometry huge.
+        if (Math.hypot(p.x - last.x, p.y - last.y) < 12) return;
+        pts.push({ x: p.x, y: p.y });
+        if (freehand.current.preview) fc.remove(freehand.current.preview);
+        const path = new Path(
+          `M ${pts.map((q) => `${q.x} ${q.y}`).join(" L ")} Z`,
+          {
+            ...TOP_LEFT,
+            fill: "rgba(233,233,238,0.5)",
+            stroke: "#7c5cff",
+            strokeWidth: 2,
+            selectable: false,
+            evented: false,
+            objectCaching: false,
+          }
+        );
+        freehand.current.preview = path;
+        fc.add(path);
+        fc.requestRenderAll();
+        return;
+      }
+
       const d = draft.current;
       if (!d) return;
       const p = fc.getScenePoint(opt.e);
@@ -252,6 +382,15 @@ export function EditorCanvas() {
         fc.defaultCursor = toolRef.current === "pan" ? "grab" : "default";
         return;
       }
+      if (freehand.current) {
+        const { pts, preview } = freehand.current;
+        if (preview) fc.remove(preview);
+        freehand.current = null;
+        commitOutline(pts, "freeform");
+        fc.requestRenderAll();
+        return;
+      }
+
       const d = draft.current;
       draft.current = null;
       if (!d) return;
@@ -390,7 +529,19 @@ export function EditorCanvas() {
               })
             : layer.kind === "bubble"
               ? new Ellipse({ ...base, rx: g.w / 2, ry: g.h / 2 })
-              : new Rect({ ...base, rx: layer.style.rx ?? 0 });
+              : g.shape === "polygon" && g.points?.length
+                ? new Polygon(
+                    g.points.map((pt) => ({ x: pt.x + g.x, y: pt.y + g.y })),
+                    { ...base, objectCaching: false }
+                  )
+                : g.shape === "freeform" && g.points?.length
+                  ? new Path(
+                      `M ${g.points
+                        .map((pt) => `${pt.x + g.x} ${pt.y + g.y}`)
+                        .join(" L ")} Z`,
+                      { ...base, objectCaching: false }
+                    )
+                  : new Rect({ ...base, rx: layer.style.rx ?? 0 });
 
         created.layerId = layer.id;
         created.selectable = interactive;
@@ -416,6 +567,10 @@ export function EditorCanvas() {
           });
         } else if (obj instanceof Ellipse) {
           obj.set({ rx: g.w / 2, ry: g.h / 2, width: g.w, height: g.h });
+        } else if (obj instanceof Polygon || obj instanceof Path) {
+          // The outline itself is baked into the object's points; only its
+          // placement is driven from the store.
+          obj.set({ left: g.x, top: g.y });
         } else {
           obj.set({ width: g.w, height: g.h, rx: layer.style.rx ?? 0 });
         }
