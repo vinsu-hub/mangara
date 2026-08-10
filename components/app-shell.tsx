@@ -8,12 +8,12 @@ import {
   Users,
   Download,
   ChevronLeft,
-  Undo2,
-  Redo2,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { signOut } from "@/app/actions";
+import { Editor } from "@/components/editor/editor";
 
 const TOP_TABS = ["Prompting", "Editing", "Reviewing"] as const;
 const MENU_ITEMS = ["File", "Edit", "View", "Timeline", "Tools", "Help"];
@@ -26,30 +26,31 @@ const RAIL_ITEMS = [
 ];
 
 export function AppShell({
+  projectId,
   projectName,
   userEmail,
 }: {
+  projectId: string;
   projectName: string;
   userEmail: string;
 }) {
-  const [activeTab, setActiveTab] = useState<(typeof TOP_TABS)[number]>("Prompting");
-  const [activeRailItem, setActiveRailItem] = useState("Main Chat");
+  const [activeTab, setActiveTab] = useState<(typeof TOP_TABS)[number]>("Editing");
+  const [activeRailItem, setActiveRailItem] = useState("Story Board");
   const [railCollapsed, setRailCollapsed] = useState(false);
 
   const initials = userEmail.slice(0, 2).toUpperCase();
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
-      {/* Top bar */}
       <header className="flex h-14 shrink-0 items-center gap-6 border-b border-border px-4">
         <div className="flex items-center gap-2 font-semibold tracking-tight">
-          <div className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
+          <div className="flex size-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
             M
           </div>
           MANGARA
         </div>
 
-        <nav className="flex items-center gap-4 text-sm text-muted-foreground">
+        <nav className="hidden items-center gap-4 text-sm text-muted-foreground lg:flex">
           {MENU_ITEMS.map((item) => (
             <span key={item} className="cursor-default select-none hover:text-foreground">
               {item}
@@ -76,12 +77,6 @@ export function AppShell({
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="size-7" disabled>
-            <Undo2 className="size-4" />
-          </Button>
-          <Button variant="ghost" size="icon" className="size-7" disabled>
-            <Redo2 className="size-4" />
-          </Button>
           <Avatar className="size-7">
             <AvatarFallback className="text-xs">{initials}</AvatarFallback>
           </Avatar>
@@ -95,8 +90,14 @@ export function AppShell({
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left rail */}
-        {!railCollapsed && (
+        {railCollapsed ? (
+          <button
+            onClick={() => setRailCollapsed(false)}
+            className="flex w-10 shrink-0 items-start justify-center border-r border-border pt-4 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        ) : (
           <aside className="flex w-56 shrink-0 flex-col border-r border-border p-3">
             <nav className="flex flex-col gap-1">
               {RAIL_ITEMS.map(({ label, icon: Icon }) => (
@@ -116,7 +117,9 @@ export function AppShell({
             </nav>
 
             <div className="mt-4 rounded-lg border border-border p-3">
-              <p className="text-xs font-medium text-muted-foreground">CURRENT PROJECT</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                CURRENT PROJECT
+              </p>
               <p className="mt-1 text-sm font-medium">{projectName}</p>
             </div>
 
@@ -132,13 +135,20 @@ export function AppShell({
           </aside>
         )}
 
-        {/* Canvas / center area */}
-        <main className="flex flex-1 items-center justify-center bg-muted/20">
-          <div className="text-center text-muted-foreground">
-            <p className="text-sm font-medium">{activeTab} canvas</p>
-            <p className="mt-1 text-xs">Editor, generation, and review tools arrive in later milestones.</p>
-          </div>
-        </main>
+        {activeTab === "Editing" ? (
+          <Editor projectId={projectId} />
+        ) : (
+          <main className="flex flex-1 items-center justify-center bg-muted/20">
+            <div className="text-center text-muted-foreground">
+              <p className="text-sm font-medium">{activeTab}</p>
+              <p className="mt-1 text-xs">
+                {activeTab === "Prompting"
+                  ? "Prompt Studio and Main Chat arrive in a later milestone. Panel prompts live in the Editing tab's Inspector for now."
+                  : "Annotation-based review arrives in a later milestone."}
+              </p>
+            </div>
+          </main>
+        )}
       </div>
     </div>
   );

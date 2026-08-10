@@ -7,36 +7,22 @@ export interface Project {
 }
 
 /**
- * Milestone 1 has no project-creation UI yet — every user gets a single
- * default project, created on first login, so the app shell has something
- * real to point at.
+ * Bootstraps the signed-in user's default project (plus its first chapter and
+ * page) if they don't have one yet.
+ *
+ * This is a single SECURITY DEFINER RPC rather than client-side inserts on
+ * purpose. Inserting the project from the client and chaining `.select()`
+ * fails: PostgREST's INSERT..RETURNING is evaluated against the SELECT policy,
+ * which requires a collaborator row that doesn't exist yet. Splitting it into
+ * two statements also risks orphaning a project the user can never see.
  */
 export async function getOrCreateDefaultProject(
-  supabase: SupabaseClient,
-  userId: string
+  supabase: SupabaseClient
 ): Promise<Project> {
-  const { data: existing } = await supabase
-    .from("projects")
-    .select("id, name, owner_id")
-    .eq("owner_id", userId)
-    .limit(1)
-    .maybeSingle();
-
-  if (existing) return existing;
-
-  const { data: created, error } = await supabase
-    .from("projects")
-    .insert({ name: "My Manga", owner_id: userId })
-    .select("id, name, owner_id")
-    .single();
+  const { data, error } = await supabase
+    .rpc("get_or_create_default_project")
+    .single<Project>();
 
   if (error) throw error;
-
-  const { error: collabError } = await supabase
-    .from("collaborators")
-    .insert({ project_id: created.id, user_id: userId, role: "owner" });
-
-  if (collabError) throw collabError;
-
-  return created;
+  return data;
 }
