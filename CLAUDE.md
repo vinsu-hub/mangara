@@ -14,11 +14,39 @@ Team/collaboration (online teammates, avatars, shared project) is part of the pr
 
 ## Stack
 
-Next.js (App Router, TypeScript) + Tailwind CSS v4 + shadcn/ui (Radix base) + Zustand + Fabric.js for the canvas + Supabase (`@supabase/supabase-js`, client in `lib/supabase.ts`) for auth/db/storage. Deployed on Vercel; GitHub remote is `vinsu-hub/mangara`. See `.env.local.example` for the required Supabase env vars — copy to `.env.local` and fill in real values locally (never committed).
+Next.js 16 (App Router, TypeScript) · Tailwind v4 · shadcn/ui (radix-nova style) · Zustand · Fabric.js 7 · Supabase (auth/Postgres/Storage) · deployed on Vercel.
 
-This is Milestone 0 of the build plan (skeleton + public deploy only) — no auth, canvas, or generation logic exists yet. Supabase client is wired but unused. See the full build-order plan (Milestones 0–5) discussed in-session for what comes next: auth, a saving canvas, the AI generation router (Gemini primary, Pollinations/HF fallback), and the reviewing loop.
+**Live:** https://mangara-iota.vercel.app (Vercel project `vince-tamis/mangara`, auto-deploys from `main`).
+**GitHub:** https://github.com/vinsu-hub/mangara.
+**Env:** copy `.env.local.example` → `.env.local`. `SUPABASE_SECRET_KEY` is server-only (never `NEXT_PUBLIC_`). `GEMINI_API_KEY` is optional — without it the generation router falls through to Pollinations, which needs no key.
 
-**Live deploy:** https://mangara-iota.vercel.app (Vercel project `vince-tamis/mangara`, auto-deploys from `main` on push). **GitHub:** https://github.com/vinsu-hub/mangara.
+## What exists
+
+Auth (email/password, middleware-gated), a Fabric.js page editor (8 tools, panel/polygon/freeform shapes, split/merge, 6 manga layout templates, grid + snap + rulers + guides, alignment snapping, undo/redo, autosave, PNG export at 1x/2x), an async AI generation pipeline (queue → provider → Storage → panel, with a Gemini/Pollinations router), Story Board (chapters → scenes → beats, page ranges wired to real pages), and Character Ref (identity, consistency-lock sliders, AI-generated turnaround/expressions/poses, relationships).
+
+**Not built:** Assets, Main Chat, Outputs, Prompt Studio, the Reviewing tab's annotation pins, mask tools, the Pen tool (registered but stubbed), and Character Ref's Design/Costumes/Appearance Lock sub-tabs. These render as honest stubs, not fake UI — keep it that way.
+
+## Working on this project — read before you start
+
+**Schema changes are a manual paste.** Only API keys are available here, never DB credentials, so `supabase/schema.sql` has to be pasted into the Supabase SQL Editor by the user. The file is idempotent and safe to re-run. Two hard constraints, both learned the painful way:
+- **Never put `storage.*` DDL in it.** `storage.objects` is owned by `supabase_storage_admin`, so `create policy` on it fails — and because the SQL Editor runs the file in one transaction, that single error silently rolls back *every table above it*. Create buckets through the Storage API instead.
+- **Never `drop function`.** Policies depend on the helper functions; dropping one fails outright. Use `create or replace`.
+
+**Tests are the source of truth, not the build.** Seven Playwright suites live in `tests/`. Every significant bug in this project passed `npm run build` and was only caught by driving the running app. Run them with:
+
+```
+python scripts/with_server.py --server "npx next dev -p 3001" --port 3001 -- python tests/<name>.spec.py
+```
+
+They need `MANGARA_TEST_EMAIL` / `MANGARA_TEST_PASSWORD` for a confirmed account (`node --env-file=.env.local scripts/create-test-user.mjs` makes one — Supabase's free tier rate-limits confirmation emails hard, so don't sign up through the UI repeatedly).
+
+Suites are idempotent: they assert on *deltas*, not absolute counts, and clean up after themselves. Keep that property — several were flaky until they did.
+
+## Traps that have already bitten
+
+- **Fabric v6+ defaults `originX/originY` to `center`.** Every geometry value here treats x/y as the top-left corner, so objects must opt into `originX: "left", originY: "top"`. Getting this wrong renders panels offset by half their size.
+- **Autosave must not write server-owned columns.** `saveLayers` deliberately omits `image_url`, `generation_status` and `last_provider` — the generation pipeline owns those, and including them made the browser's stale copy clobber finished results.
+- **`--font-sans` must not be self-referential.** It was, for most of this project's life, and every screen silently rendered in the browser's fallback serif. `tests/snapping.spec.py` guards it.
 
 ## Relevant skills for this project
 
