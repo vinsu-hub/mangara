@@ -10,6 +10,7 @@ import {
   Point,
   Polygon,
   Rect,
+  InteractiveFabricObject,
   Textbox,
   type FabricObject,
   type TPointerEvent,
@@ -17,6 +18,11 @@ import {
 } from "fabric";
 import { useEditor } from "@/lib/store/editor";
 import { Rulers } from "./rulers";
+import {
+  computeResizeSnap,
+  computeSnap,
+  type SnapLine,
+} from "@/lib/snapping";
 import type { Layer, LayerKind } from "@/lib/types";
 
 const PAGE_BG = "#ffffff";
@@ -35,6 +41,19 @@ const DEFAULTS: Record<LayerKind, { fill: string; stroke: string }> = {
   bubble: { fill: "#ffffff", stroke: "#111111" },
   sfx: { fill: "transparent", stroke: "transparent" },
 };
+
+// Crisper, smaller handles than fabric's pale default. Set once on the class
+// rather than per object so every shape type picks them up.
+Object.assign(InteractiveFabricObject.ownDefaults, {
+  cornerStyle: "rect" as const,
+  cornerSize: 9,
+  cornerColor: "#ffffff",
+  cornerStrokeColor: "#7c5cff",
+  transparentCorners: false,
+  borderColor: "#7c5cff",
+  borderScaleFactor: 1.5,
+  padding: 2,
+});
 
 /** Fabric object augmented with the id of the layer it represents. */
 type TaggedObject = FabricObject & { layerId?: string };
@@ -95,10 +114,19 @@ function commitOutline(
 }
 
 
-/** Mirrors fabric's viewport transform into the store for the rulers. */
+/**
+ * Mirrors fabric's viewport transform into the store for the rulers.
+ * Throttled to one write per frame — panning fires mousemove far faster than
+ * the rulers can usefully repaint, and each write re-renders them.
+ */
+let viewportFrame = 0;
 function syncViewport(fc: FabricCanvas) {
-  const vpt = fc.viewportTransform;
-  useEditor.getState().setViewport({ zoom: vpt[0], tx: vpt[4], ty: vpt[5] });
+  if (viewportFrame) return;
+  viewportFrame = requestAnimationFrame(() => {
+    viewportFrame = 0;
+    const vpt = fc.viewportTransform;
+    useEditor.getState().setViewport({ zoom: vpt[0], tx: vpt[4], ty: vpt[5] });
+  });
 }
 
 /** Rounds a value to the nearest grid line. */
@@ -145,6 +173,13 @@ export function EditorCanvas() {
   const freehand = useRef<{ pts: { x: number; y: number }[]; preview: Path | null } | null>(null);
   const panning = useRef<{ x: number; y: number } | null>(null);
   const suppress = useRef(false);
+  /** Lines to draw for the in-progress snap; cleared when the drag ends. */
+  const snapLines = useRef<SnapLine[]>([]);
+  /**
+   * The layer currently being dragged. The store→fabric sync skips it, so the
+   * editor stops writing over the very object under the cursor every frame.
+   */
+  const transforming = useRef<string | null>(null);
 
   const page = useEditor((s) => s.page);
   const layers = useEditor((s) => s.layers);
@@ -155,6 +190,7 @@ export function EditorCanvas() {
   const gridEnabled = useEditor((s) => s.gridEnabled);
   const gridSize = useEditor((s) => s.gridSize);
   const rulerEnabled = useEditor((s) => s.rulerEnabled);
+  const guides = useEditor((s) => s.guides);
 
   useEffect(() => {
     shapeRef.current = shapeMode;
@@ -275,28 +311,78 @@ export function EditorCanvas() {
 
     fc.on("object:moving", (e) => {
       const obj = e.target as TaggedObject;
-      const { snapEnabled, gridSize } = useEditor.getState();
-      if (snapEnabled) {
+      const st = useEditor.getState();
+      transforming.current = obj.layerId ?? null;
+      snapLines.current = [];
+
+      if (st.snapEnabled) {
         obj.set({
-          left: snapTo(obj.left ?? 0, gridSize),
-          top: snapTo(obj.top ?? 0, gridSize),
+          left: snapTo(obj.left ?? 0, st.gridSize),
+          top: snapTo(obj.top ?? 0, st.gridSize),
         });
-        obj.setCoords();
       }
+
+      // Alignment runs after the grid so it can override it — an edge shared
+      // with a real panel is a more deliberate target than a grid line.
+      if (st.alignEnabled && st.page) {
+        const geo = {
+          ...(st.layers.find((l) => l.id === obj.layerId)?.geometry ??
+            { rotation: 0, shape: "rectangle" as const }),
+          x: obj.left ?? 0,
+          y: obj.top ?? 0,
+          w: (obj.width ?? 0) * (obj.scaleX ?? 1),
+          h: (obj.height ?? 0) * (obj.scaleY ?? 1),
+        };
+        const { dx, dy, lines } = computeSnap(
+          geo,
+          st.layers.filter((l) => l.id !== obj.layerId),
+          st.page,
+          st.guides,
+          fc.getZoom()
+        );
+        if (dx || dy) obj.set({ left: (obj.left ?? 0) + dx, top: (obj.top ?? 0) + dy });
+        snapLines.current = lines;
+      }
+
+      obj.setCoords();
       writeBack(obj, true);
     });
     fc.on("object:scaling", (e) => {
       const obj = e.target as TaggedObject;
-      const { snapEnabled, gridSize } = useEditor.getState();
-      if (snapEnabled) {
-        obj.set({
-          width: Math.max(gridSize, snapTo((obj.width ?? 0) * (obj.scaleX ?? 1), gridSize)),
-          height: Math.max(gridSize, snapTo((obj.height ?? 0) * (obj.scaleY ?? 1), gridSize)),
-          scaleX: 1,
-          scaleY: 1,
-        });
-        obj.setCoords();
+      const st = useEditor.getState();
+      transforming.current = obj.layerId ?? null;
+      snapLines.current = [];
+
+      let w = (obj.width ?? 0) * (obj.scaleX ?? 1);
+      let h = (obj.height ?? 0) * (obj.scaleY ?? 1);
+
+      if (st.snapEnabled) {
+        w = Math.max(st.gridSize, snapTo(w, st.gridSize));
+        h = Math.max(st.gridSize, snapTo(h, st.gridSize));
       }
+
+      if (st.alignEnabled && st.page) {
+        const snapped = computeResizeSnap(
+          {
+            x: obj.left ?? 0,
+            y: obj.top ?? 0,
+            w,
+            h,
+            rotation: 0,
+            shape: "rectangle",
+          },
+          st.layers.filter((l) => l.id !== obj.layerId),
+          st.page,
+          st.guides,
+          fc.getZoom()
+        );
+        w = snapped.w;
+        h = snapped.h;
+        snapLines.current = snapped.lines;
+      }
+
+      obj.set({ width: w, height: h, scaleX: 1, scaleY: 1 });
+      obj.setCoords();
       writeBack(obj, true);
     });
     fc.on("object:rotating", (e) => writeBack(e.target as TaggedObject, true));
@@ -314,6 +400,9 @@ export function EditorCanvas() {
       }
       writeBack(obj, true);
       useEditor.getState().commit();
+      transforming.current = null;
+      snapLines.current = [];
+      fc.requestRenderAll();
     });
 
     // -- draw / pan --------------------------------------------------------
@@ -521,6 +610,57 @@ export function EditorCanvas() {
       st.setTool("select");
     });
 
+    // -- guides + snap lines ----------------------------------------------
+    // Drawn straight onto the context after fabric renders, in screen space,
+    // so they stay a crisp 1px hairline at any zoom instead of scaling with
+    // the scene the way a fabric object would.
+    fc.on("after:render", () => {
+      const st = useEditor.getState();
+      const ctx = fc.getContext();
+      const vpt = fc.viewportTransform;
+      const toX = (x: number) => x * vpt[0] + vpt[4];
+      const toY = (y: number) => y * vpt[3] + vpt[5];
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.lineWidth = 1;
+
+      // Persistent ruler guides.
+      ctx.strokeStyle = "#22d3ee";
+      for (const y of st.guides.h) {
+        const py = Math.round(toY(y)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, py);
+        ctx.lineTo(fc.getWidth(), py);
+        ctx.stroke();
+      }
+      for (const x of st.guides.v) {
+        const px = Math.round(toX(x)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, fc.getHeight());
+        ctx.stroke();
+      }
+
+      // Transient alignment feedback for the drag in progress.
+      for (const line of snapLines.current) {
+        ctx.strokeStyle = line.kind === "guide" ? "#22d3ee" : "#ff3d8b";
+        ctx.beginPath();
+        if (line.axis === "x") {
+          const px = Math.round(toX(line.at)) + 0.5;
+          ctx.moveTo(px, toY(line.from));
+          ctx.lineTo(px, toY(line.to));
+        } else {
+          const py = Math.round(toY(line.at)) + 0.5;
+          ctx.moveTo(toX(line.from), py);
+          ctx.lineTo(toX(line.to), py);
+        }
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    });
+
     // -- wheel zoom --------------------------------------------------------
     fc.on("mouse:wheel", (opt) => {
       const e = opt.e as WheelEvent;
@@ -659,6 +799,10 @@ export function EditorCanvas() {
         objects.current.set(layer.id, created);
         fc.add(created);
         obj = created;
+      } else if (layer.id === transforming.current) {
+        // Fabric already has the authoritative position mid-gesture; writing
+        // the store's copy back here would fight the cursor every frame.
+        continue;
       } else {
         const g = layer.geometry;
         obj.set({
@@ -735,6 +879,11 @@ export function EditorCanvas() {
 
     fc.requestRenderAll();
   }, [layers]);
+
+  // Guides are painted in after:render, so a change needs a repaint.
+  useEffect(() => {
+    fcRef.current?.requestRenderAll();
+  }, [guides]);
 
   // ------------------------------------------------ selection → fabric ----
   useEffect(() => {
@@ -867,6 +1016,7 @@ export function EditorCanvas() {
         case "g": st.toggleGrid(); break;
         case "r": st.toggleRuler(); break;
         case "s": st.toggleSnap(); break;
+        case "a": st.toggleAlign(); break;
       }
     };
     window.addEventListener("keydown", onKey);

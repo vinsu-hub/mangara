@@ -21,7 +21,7 @@ function NumField({
         type="number"
         value={Math.round(value)}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
-        className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
+        className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs tabular-nums outline-none focus:border-primary"
       />
     </label>
   );
@@ -126,13 +126,13 @@ export function Inspector({
               <span className="w-14 text-muted-foreground">Border</span>
               <input type="number" value={layer.style.strokeWidth ?? 2}
                 onChange={(e) => updateLayer(layer.id, { style: { ...layer.style, strokeWidth: Number(e.target.value) || 0 } })}
-                className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary" />
+                className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs tabular-nums outline-none focus:border-primary" />
             </label>
             <label className="flex items-center gap-2 text-xs">
               <span className="w-14 text-muted-foreground">Corner</span>
               <input type="number" value={layer.style.rx ?? 0}
                 onChange={(e) => updateLayer(layer.id, { style: { ...layer.style, rx: Number(e.target.value) || 0 } })}
-                className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary" />
+                className="w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs tabular-nums outline-none focus:border-primary" />
             </label>
           </section>
 

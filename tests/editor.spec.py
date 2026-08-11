@@ -130,13 +130,14 @@ with sync_playwright() as p:
     # --- layers tab ---------------------------------------------------------
     page.get_by_role("button", name="layers", exact=True).click()
     page.wait_for_timeout(300)
-    expect(page.get_by_role("button", name=re.compile("panel")).first).to_be_visible()
+    layer_row = page.locator("aside").get_by_role("button", name=re.compile(r"^panel"))
+    expect(layer_row.first).to_be_visible()
     print("layers: panel listed")
 
     # --- cleanup: delete what this run created ------------------------------
-    page.get_by_role("button", name=re.compile("panel")).first.click()
+    layer_row.first.click()
     page.wait_for_timeout(200)
-    page.get_by_title("Delete").click()
+    page.get_by_title("Delete", exact=True).click()
     page.wait_for_timeout(300)
     assert layer_count(page) == before, "cleanup did not restore the original count"
     expect(page.locator(STATUS)).to_have_text(re.compile(r"^Saved "), timeout=20_000)

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Geometry, Layer, PanelShape, Page, ToolId } from "@/lib/types";
 import { mergeGeometry, splitGeometry } from "@/lib/layouts";
+import { emptyGuides, type Guides } from "@/lib/snapping";
 
 const HISTORY_LIMIT = 50;
 
@@ -28,6 +29,9 @@ interface EditorState {
   snapEnabled: boolean;
   gridSize: number;
   rulerEnabled: boolean;
+  /** Alignment snapping to other panels, page edges and guides. */
+  alignEnabled: boolean;
+  guides: Guides;
   clipboard: Layer[];
   /**
    * Set when another view (the Story Board) asks the editor to open a
@@ -40,7 +44,7 @@ interface EditorState {
   past: Layer[][];
   future: Layer[][];
 
-  loadPage: (page: Page, layers: Layer[]) => void;
+  loadPage: (page: Page, layers: Layer[], guides?: Guides) => void;
   setTool: (tool: ToolId) => void;
   setShapeMode: (shape: PanelShape) => void;
   selectMany: (ids: string[]) => void;
@@ -50,6 +54,12 @@ interface EditorState {
   toggleSnap: () => void;
   setGridSize: (n: number) => void;
   toggleRuler: () => void;
+  toggleAlign: () => void;
+  setGuides: (guides: Guides) => void;
+  addGuide: (axis: "h" | "v", at: number) => void;
+  moveGuide: (axis: "h" | "v", index: number, at: number) => void;
+  removeGuide: (axis: "h" | "v", index: number) => void;
+  clearGuides: () => void;
   requestPage: (pageId: string | null) => void;
 
   copySelection: () => void;
@@ -131,6 +141,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   snapEnabled: false,
   gridSize: 64,
   rulerEnabled: false,
+  alignEnabled: true,
+  guides: emptyGuides(),
   clipboard: [],
   requestedPageId: null,
   saving: false,
@@ -138,8 +150,16 @@ export const useEditor = create<EditorState>((set, get) => ({
   past: [],
   future: [],
 
-  loadPage: (page, layers) =>
-    set({ page, layers, selectedId: null, selectedIds: [], past: [], future: [] }),
+  loadPage: (page, layers, guides = emptyGuides()) =>
+    set({
+      page,
+      layers,
+      guides,
+      selectedId: null,
+      selectedIds: [],
+      past: [],
+      future: [],
+    }),
 
   setTool: (tool) => set({ tool }),
   setShapeMode: (shapeMode) => set({ shapeMode }),
@@ -151,6 +171,24 @@ export const useEditor = create<EditorState>((set, get) => ({
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
   setGridSize: (gridSize) => set({ gridSize }),
   toggleRuler: () => set((s) => ({ rulerEnabled: !s.rulerEnabled })),
+  toggleAlign: () => set((s) => ({ alignEnabled: !s.alignEnabled })),
+  setGuides: (guides) => set({ guides }),
+  addGuide: (axis, at) =>
+    set((s) => ({
+      guides: { ...s.guides, [axis]: [...s.guides[axis], Math.round(at)] },
+    })),
+  moveGuide: (axis, index, at) =>
+    set((s) => ({
+      guides: {
+        ...s.guides,
+        [axis]: s.guides[axis].map((v, i) => (i === index ? Math.round(at) : v)),
+      },
+    })),
+  removeGuide: (axis, index) =>
+    set((s) => ({
+      guides: { ...s.guides, [axis]: s.guides[axis].filter((_, i) => i !== index) },
+    })),
+  clearGuides: () => set({ guides: { h: [], v: [] } }),
   requestPage: (requestedPageId) => set({ requestedPageId }),
 
   copySelection: () =>

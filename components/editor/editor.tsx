@@ -9,7 +9,9 @@ import {
   deletePage,
   getFirstChapter,
   listPages,
+  loadGuides,
   loadLayers,
+  saveGuides,
   saveLayers,
 } from "@/lib/pages";
 import type { Layer, Page } from "@/lib/types";
@@ -37,6 +39,9 @@ export function Editor({ projectId }: { projectId: string }) {
 
   const page = useEditor((s) => s.page);
   const layers = useEditor((s) => s.layers);
+  const guides = useEditor((s) => s.guides);
+  // Subscribed rather than read via getState(), which never re-rendered.
+  const zoomPct = useEditor((s) => s.viewport.zoom * 100);
   const loadPage = useEditor((s) => s.loadPage);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,10 +68,13 @@ export function Editor({ projectId }: { projectId: string }) {
         const first = (requested && list.find((pg) => pg.id === requested)) || list[0];
         if (requested) useEditor.getState().requestPage(null);
 
-        const initial = await loadLayers(supabase, first.id);
+        const [initial, pageGuides] = await Promise.all([
+          loadLayers(supabase, first.id),
+          loadGuides(supabase, first.id),
+        ]);
         if (cancelled) return;
         skipNextSave.current = true;
-        loadPage(first, initial);
+        loadPage(first, initial, pageGuides);
       } catch (e) {
         if (!cancelled) setError(errorMessage(e));
       }
@@ -88,7 +96,10 @@ export function Editor({ projectId }: { projectId: string }) {
     useEditor.getState().setSaving(true);
     saveTimer.current = setTimeout(async () => {
       try {
-        await saveLayers(supabase, page.id, layers);
+        await Promise.all([
+          saveLayers(supabase, page.id, layers),
+          saveGuides(supabase, page.id, useEditor.getState().guides),
+        ]);
         useEditor.getState().markSaved();
       } catch (e) {
         useEditor.getState().setSaving(false);
@@ -99,7 +110,7 @@ export function Editor({ projectId }: { projectId: string }) {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [layers, page, supabase]);
+  }, [layers, guides, page, supabase]);
 
   // ------------------------------------------- poll pending generations ---
   useEffect(() => {
@@ -160,9 +171,12 @@ export function Editor({ projectId }: { projectId: string }) {
         clearTimeout(saveTimer.current);
         await saveLayers(supabase, page.id, useEditor.getState().layers);
       }
-      const next_layers = await loadLayers(supabase, next.id);
+      const [next_layers, next_guides] = await Promise.all([
+        loadLayers(supabase, next.id),
+        loadGuides(supabase, next.id),
+      ]);
       skipNextSave.current = true;
-      loadPage(next, next_layers);
+      loadPage(next, next_layers, next_guides);
     },
     [page, supabase, loadPage]
   );
@@ -280,7 +294,7 @@ export function Editor({ projectId }: { projectId: string }) {
         <div className="flex shrink-0 items-center gap-4 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
           <span>Page {page?.order_index ?? "–"}</span>
           <span>{layers.length} layers</span>
-          <span className="ml-auto">{Math.round(useEditor.getState().zoom * 100)}%</span>
+          <span className="ml-auto font-mono tabular-nums">{Math.round(zoomPct)}%</span>
         </div>
       </div>
       <Inspector onGenerate={generate} />

@@ -416,3 +416,8 @@ drop policy if exists "generations: all" on generations;
 create policy "generations: all" on generations for all
   using (can_access_panel(panel_id) or can_access_character(character_id))
   with check (can_access_panel(panel_id) or can_access_character(character_id));
+
+-- ---------------------------------------------------------------- guides ----
+-- Photoshop-style ruler guides, stored with the page like Photoshop stores
+-- them with the document. { "h": [y, ...], "v": [x, ...] } in page pixels.
+alter table pages add column if not exists guides jsonb default '{"h":[],"v":[]}'::jsonb;

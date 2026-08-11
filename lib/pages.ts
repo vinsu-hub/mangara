@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Chapter, Layer, Page } from "@/lib/types";
+import type { Guides } from "@/lib/snapping";
 
 interface PanelRow {
   id: string;
@@ -55,7 +56,7 @@ export async function listPages(
 ): Promise<Page[]> {
   const { data, error } = await supabase
     .from("pages")
-    .select("id, chapter_id, order_index, width, height")
+    .select("id, chapter_id, order_index, width, height, guides")
     .eq("chapter_id", chapterId)
     .order("order_index");
 
@@ -71,7 +72,7 @@ export async function createPage(
   const { data, error } = await supabase
     .from("pages")
     .insert({ chapter_id: chapterId, order_index: orderIndex })
-    .select("id, chapter_id, order_index, width, height")
+    .select("id, chapter_id, order_index, width, height, guides")
     .single();
 
   if (error) throw error;
@@ -156,4 +157,32 @@ export async function saveLayers(
     );
     if (error) throw error;
   }
+}
+
+
+export async function loadGuides(
+  supabase: SupabaseClient,
+  pageId: string
+): Promise<Guides> {
+  const { data, error } = await supabase
+    .from("pages")
+    .select("guides")
+    .eq("id", pageId)
+    .single();
+  if (error) throw error;
+  const g = (data?.guides ?? null) as Partial<Guides> | null;
+  return { h: g?.h ?? [], v: g?.v ?? [] };
+}
+
+/** Guides belong to the page, not to its panels, so they save separately. */
+export async function saveGuides(
+  supabase: SupabaseClient,
+  pageId: string,
+  guides: Guides
+): Promise<void> {
+  const { error } = await supabase
+    .from("pages")
+    .update({ guides })
+    .eq("id", pageId);
+  if (error) throw error;
 }

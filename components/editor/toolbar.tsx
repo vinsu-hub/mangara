@@ -25,6 +25,8 @@ import {
   Grid3x3,
   Magnet,
   Ruler,
+  AlignHorizontalDistributeCenter,
+  Eraser,
 } from "lucide-react";
 import { useEditor } from "@/lib/store/editor";
 import { LAYOUTS, instantiateLayout } from "@/lib/layouts";
@@ -78,6 +80,10 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
   const toggleSnap = useEditor((s) => s.toggleSnap);
   const toggleRuler = useEditor((s) => s.toggleRuler);
   const setGridSize = useEditor((s) => s.setGridSize);
+  const alignEnabled = useEditor((s) => s.alignEnabled);
+  const toggleAlign = useEditor((s) => s.toggleAlign);
+  const clearGuides = useEditor((s) => s.clearGuides);
+  const guideCount = useEditor((s) => s.guides.h.length + s.guides.v.length);
 
   const [layoutOpen, setLayoutOpen] = useState(false);
   const confirm = useConfirm();
@@ -188,6 +194,18 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
           <Magnet className="size-4" />
         </button>
         <button
+          onClick={toggleAlign}
+          title="Align to other panels (A)"
+          aria-pressed={alignEnabled}
+          className={`rounded-md p-2 transition-colors ${
+            alignEnabled
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <AlignHorizontalDistributeCenter className="size-4" />
+        </button>
+        <button
           onClick={toggleRuler}
           title="Rulers (R)"
           aria-pressed={rulerEnabled}
@@ -199,6 +217,15 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
         >
           <Ruler className="size-4" />
         </button>
+        {guideCount > 0 && (
+          <button
+            onClick={clearGuides}
+            title={`Clear ${guideCount} guide${guideCount === 1 ? "" : "s"}`}
+            className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <Eraser className="size-4" />
+          </button>
+        )}
         <select
           value={gridSize}
           aria-label="Grid size"
