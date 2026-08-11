@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Plus, Search, Sparkles, Trash2, UserPlus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { errorMessage } from "@/lib/errors";
+import { useConfirm } from "@/components/confirm-provider";
 import {
   DEFAULT_LOCK,
   EXPRESSION_SET,
@@ -131,6 +132,7 @@ export function CharacterRef({
   const [generating, setGenerating] = useState<ReferenceKind | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const confirm = useConfirm();
 
   const active = characters.find((c) => c.id === activeId) ?? null;
 
@@ -691,7 +693,15 @@ export function CharacterRef({
                   <button
                     onClick={() =>
                       guard(async () => {
-                        if (!window.confirm(`Delete ${active.name}?`)) return;
+                        const choice = await confirm({
+                          title: `Delete ${active.name}?`,
+                          description:
+                            "Their reference images, relationships and consistency lock are removed too. This cannot be undone.",
+                          actions: [
+                            { id: "delete", label: "Delete character", variant: "destructive" },
+                          ],
+                        });
+                        if (choice !== "delete") return;
                         await deleteCharacter(supabase, active.id);
                         setCharacters((c) => c.filter((x) => x.id !== active.id));
                         setActiveId(null);

@@ -43,7 +43,6 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1600, "height": 950})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("dialog", lambda d: d.accept())  # layout replace confirmation
 
     page.goto(BASE, timeout=30_000)
     page.wait_for_load_state("networkidle")
@@ -66,13 +65,44 @@ with sync_playwright() as p:
     print("sub-toolbar: shape modes + split/merge/layout present")
 
     # --- apply a layout template -------------------------------------------
-    page.get_by_role("button", name=re.compile("Layout")).click()
-    page.wait_for_timeout(300)
-    page.get_by_text("3 tiers", exact=True).click()
-    page.wait_for_timeout(1200)
-    after_layout = layer_count(page)
-    assert after_layout == 3, f"3-tier template made {after_layout} panels, expected 3"
+    # --- layout templates + the three-way dialog ---------------------------
+    def apply_layout(label_or_hint: str, choice: str | None):
+        """Open the Layout menu, pick a template, and answer the dialog if one
+        appears. `choice` is a button name, or None to press Escape."""
+        page.get_by_role("button", name=re.compile("Layout")).click()
+        page.wait_for_timeout(300)
+        page.get_by_text(label_or_hint, exact=True).click()
+        page.wait_for_timeout(600)
+        dlg = page.get_by_role("alertdialog")
+        if dlg.count() and dlg.first.is_visible():
+            if choice is None:
+                page.keyboard.press("Escape")
+            else:
+                dlg.get_by_role("button", name=choice).click()
+            page.wait_for_timeout(1000)
+            return True
+        return False
+
+    # Replacing always yields exactly the template's panels, whatever was there.
+    apply_layout("3 tiers", "Replace panels")
+    page.wait_for_timeout(800)
+    assert layer_count(page) == 3, f"3-tier replace gave {layer_count(page)}, expected 3"
     print("layout: 3-tier template produced exactly 3 panels")
+
+    # Cancelling must change nothing — the old native prompt had no way to
+    # back out at all, since its Cancel meant "add alongside".
+    asked = apply_layout("Four equal panels", None)
+    assert asked, "a page with panels applied a layout without asking"
+    assert layer_count(page) == 3, "Escape on the layout dialog changed the page"
+    print("layout dialog: three options offered, Escape left the page untouched")
+
+    # Add alongside keeps what's there.
+    apply_layout("Four equal panels", "Add alongside")
+    assert layer_count(page) == 7, f"add alongside gave {layer_count(page)}, expected 7"
+    page.get_by_title("Undo (Ctrl+Z)").click()
+    page.wait_for_timeout(600)
+    assert layer_count(page) == 3, "undo after add-alongside did not restore"
+    print("layout dialog: Add alongside kept existing panels (3 -> 7), undone")
 
     # --- split ---------------------------------------------------------------
     box = page.locator("canvas.lower-canvas").bounding_box()

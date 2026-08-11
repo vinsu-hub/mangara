@@ -18,6 +18,7 @@ import { StoryBoard } from "@/components/story-board/story-board";
 import { CharacterRef } from "@/components/character-ref/character-ref";
 import { useEditor } from "@/lib/store/editor";
 import { characterPromptBlock } from "@/lib/characters";
+import { ConfirmProvider } from "@/components/confirm-provider";
 
 const TOP_TABS = ["Prompting", "Editing", "Reviewing"] as const;
 const MENU_ITEMS = ["File", "Edit", "View", "Timeline", "Tools", "Help"];
@@ -70,6 +71,7 @@ export function AppShell({
   };
 
   return (
+    <ConfirmProvider>
     <div className="flex h-svh flex-col bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center gap-6 border-b border-border px-4">
         <div className="flex items-center gap-2 font-semibold tracking-tight">
@@ -184,5 +186,6 @@ export function AppShell({
         )}
       </div>
     </div>
+    </ConfirmProvider>
   );
 }

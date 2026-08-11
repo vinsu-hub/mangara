@@ -14,6 +14,7 @@ import {
 } from "@/lib/pages";
 import type { Layer, Page } from "@/lib/types";
 import { errorMessage } from "@/lib/errors";
+import { useConfirm } from "@/components/confirm-provider";
 import { Toolbar } from "./toolbar";
 import { Inspector } from "./inspector";
 import { PageStrip } from "./page-strip";
@@ -32,6 +33,7 @@ export function Editor({ projectId }: { projectId: string }) {
   const [pages, setPages] = useState<Page[]>([]);
   const [chapterId, setChapterId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const page = useEditor((s) => s.page);
   const layers = useEditor((s) => s.layers);
@@ -176,13 +178,13 @@ export function Editor({ projectId }: { projectId: string }) {
   const removePage = useCallback(
     async (target: Page) => {
       if (pages.length <= 1) return;
-      if (
-        !window.confirm(
-          `Delete page ${target.order_index} and everything on it? This cannot be undone.`
-        )
-      ) {
-        return;
-      }
+      const choice = await confirm({
+        title: `Delete page ${target.order_index}?`,
+        description:
+          "Every panel on this page goes with it. This cannot be undone.",
+        actions: [{ id: "delete", label: "Delete page", variant: "destructive" }],
+      });
+      if (choice !== "delete") return;
       try {
         await deletePage(supabase, target.id);
         const remaining = pages.filter((pg) => pg.id !== target.id);
@@ -196,7 +198,7 @@ export function Editor({ projectId }: { projectId: string }) {
         setError(errorMessage(e));
       }
     },
-    [pages, page, supabase, loadPage]
+    [pages, page, supabase, loadPage, confirm]
   );
 
   const generate = useCallback(

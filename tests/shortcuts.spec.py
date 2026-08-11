@@ -49,7 +49,6 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1600, "height": 950})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("dialog", lambda d: d.accept())
 
     page.goto(BASE, timeout=30_000)
     page.wait_for_load_state("networkidle")

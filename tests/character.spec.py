@@ -26,7 +26,6 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1600, "height": 950})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("dialog", lambda d: d.accept())
 
     page.goto(BASE, timeout=30_000)
     page.wait_for_load_state("networkidle")
@@ -87,7 +86,20 @@ with sync_playwright() as p:
     print("quick actions: present")
 
     # --- cleanup ------------------------------------------------------------
-    page.get_by_role("button", name=re.compile("Delete character")).click()
+    page.get_by_role("button", name=re.compile("Delete character")).first.click()
+    dialog = page.get_by_role("alertdialog")
+    expect(dialog).to_be_visible(timeout=10_000)
+
+    # Cancelling must leave the character alone.
+    dialog.get_by_role("button", name="Cancel").click()
+    page.wait_for_timeout(800)
+    expect(page.get_by_label("Character name", exact=True)).to_have_value("Kaito")
+    print("delete dialog: Cancel kept the character")
+
+    page.get_by_role("button", name=re.compile("Delete character")).first.click()
+    page.get_by_role("alertdialog").get_by_role(
+        "button", name="Delete character"
+    ).click(timeout=10_000)
     page.wait_for_timeout(1500)
     print("cleanup: character deleted")
 

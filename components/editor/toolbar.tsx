@@ -30,6 +30,7 @@ import { useEditor } from "@/lib/store/editor";
 import { LAYOUTS, instantiateLayout } from "@/lib/layouts";
 import { GRID_SIZES } from "@/lib/store/editor";
 import type { PanelShape, ToolId } from "@/lib/types";
+import { useConfirm } from "@/components/confirm-provider";
 
 const TOOLS: { id: ToolId; label: string; icon: typeof Square; key?: string }[] = [
   { id: "select", label: "Select", icon: MousePointer2, key: "V" },
@@ -79,19 +80,31 @@ export function Toolbar({ onExport }: { onExport: (scale: number) => void }) {
   const setGridSize = useEditor((s) => s.setGridSize);
 
   const [layoutOpen, setLayoutOpen] = useState(false);
+  const confirm = useConfirm();
 
-  const applyTemplate = (layoutId: string) => {
+  const applyTemplate = async (layoutId: string) => {
     const layout = LAYOUTS.find((l) => l.id === layoutId);
     if (!layout || !page) return;
-    const hasPanels = layerCount > 0;
-    const replace =
-      !hasPanels ||
-      window.confirm(
-        "Replace the existing panels on this page with this layout?\n\n" +
-          "OK replaces them (undoable). Cancel adds the layout alongside what's already here."
-      );
-    applyLayout(instantiateLayout(layout, page.width, page.height), replace);
     setLayoutOpen(false);
+
+    // An empty page has nothing to lose, so don't ask.
+    let replace = true;
+    if (layerCount > 0) {
+      const choice = await confirm({
+        title: `Apply the "${layout.name}" layout?`,
+        description:
+          "This page already has panels. Replacing swaps them for the layout; " +
+          "adding keeps them and puts the layout on top. Either way you can undo it.",
+        actions: [
+          { id: "alongside", label: "Add alongside", variant: "ghost" },
+          { id: "replace", label: "Replace panels" },
+        ],
+      });
+      if (choice === null) return;
+      replace = choice === "replace";
+    }
+
+    applyLayout(instantiateLayout(layout, page.width, page.height), replace);
   };
 
   return (

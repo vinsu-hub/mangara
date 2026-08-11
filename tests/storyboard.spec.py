@@ -33,7 +33,6 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={"width": 1600, "height": 950})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("dialog", lambda d: d.accept())  # page-delete confirmation
 
     page.goto(BASE, timeout=30_000)
     page.wait_for_load_state("networkidle")
@@ -158,6 +157,7 @@ with sync_playwright() as p:
         if btn.count():
             btn.first.hover()
             btn.first.click()
+            page.get_by_role("button", name="Delete page").click(timeout=10_000)
             page.wait_for_timeout(900)
     remaining = [
         n for n in (P0, P0 + 1, P0 + 2)
